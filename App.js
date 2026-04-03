@@ -1,4 +1,6 @@
-// Burraco Score - SDK 52 - voce con @react-native-voice/voice
+// Burraco Score - SDK 52
+// La dettatura vocale funziona tramite il microfono integrato nella tastiera Android.
+// Tocca il campo, poi tocca 🎤 sulla tastiera per dettare il numero.
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
@@ -7,7 +9,6 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
-import Voice from '@react-native-voice/voice';
 import { StatusBar } from 'expo-status-bar';
 
 const CHIAVE_STORAGE = 'anthropic_api_key';
@@ -43,7 +44,6 @@ function calcolaVPdaTabella(tabella, diffCalcolata) {
     : { vpA: riga.vpP, vpB: riga.vpV };
 }
 
-// ── Parsing valore ────────────────────────────────────────────────────────────
 function parseValore(v) {
   if (v === null || v === undefined) return 0;
   const s = String(v).trim();
@@ -53,61 +53,20 @@ function parseValore(v) {
   return isNaN(n) ? 0 : n;
 }
 
-// Converte testo parlato in numero
-function parseTesto(testo) {
-  if (!testo) return null;
-  const s = testo.toLowerCase().trim();
-  // Rimuovi parole inutili
-  const pulito = s
-    .replace(/\bmeno\b/g, '-')
-    .replace(/\bnegativo\b/g, '-')
-    .replace(/[^0-9\-]/g, ' ')
-    .trim()
-    .replace(/\s+/g, '');
-  const n = parseInt(pulito, 10);
-  return isNaN(n) ? null : String(n);
-}
+// ── Campo con pulsante microfono ──────────────────────────────────────────────
+// Il microfono focalizza il campo: l'utente usa il 🎤 integrato nella tastiera Android
+function Campo({ value, onChange, errore, warn, inputRef: externalRef }) {
+  const internalRef = useRef(null);
+  const ref = externalRef || internalRef;
 
-// ── Hook dettatura vocale ─────────────────────────────────────────────────────
-function useDettatura(onRisultato) {
-  const [ascolto, setAscolto] = useState(false);
-
-  useEffect(() => {
-    Voice.onSpeechResults = (e) => {
-      const testo = e.value?.[0] ?? null;
-      const numero = parseTesto(testo);
-      if (numero !== null) onRisultato(numero);
-      setAscolto(false);
-    };
-    Voice.onSpeechError = () => setAscolto(false);
-    return () => { Voice.destroy().then(Voice.removeAllListeners); };
-  }, [onRisultato]);
-
-  const avvia = async () => {
-    try {
-      setAscolto(true);
-      await Voice.start('it-IT');
-    } catch (e) {
-      setAscolto(false);
-      Alert.alert('Voce non disponibile', 'Il riconoscimento vocale non funziona su questo dispositivo.');
-    }
+  const focusPerVoce = () => {
+    ref.current?.focus();
   };
-
-  const ferma = async () => {
-    try { await Voice.stop(); } catch (_) {}
-    setAscolto(false);
-  };
-
-  return { ascolto, avvia, ferma };
-}
-
-// ── Campo con microfono ───────────────────────────────────────────────────────
-function Campo({ value, onChange, errore, warn }) {
-  const { ascolto, avvia, ferma } = useDettatura(onChange);
 
   return (
     <View style={s.campoWrap}>
       <TextInput
+        ref={ref}
         keyboardType="numbers-and-punctuation"
         value={value}
         onChangeText={onChange}
@@ -116,11 +75,8 @@ function Campo({ value, onChange, errore, warn }) {
         placeholderTextColor="#bbb"
         selectTextOnFocus
       />
-      <TouchableOpacity
-        onPress={ascolto ? ferma : avvia}
-        style={[s.btnMic, ascolto && s.btnMicAscolto]}
-      >
-        <Text style={{ fontSize: 14 }}>{ascolto ? '⏹' : '🎤'}</Text>
+      <TouchableOpacity onPress={focusPerVoce} style={s.btnMic}>
+        <Text style={{ fontSize: 13 }}>🎤</Text>
       </TouchableOpacity>
     </View>
   );
@@ -129,8 +85,8 @@ function Campo({ value, onChange, errore, warn }) {
 // ── Blocco singola mano ───────────────────────────────────────────────────────
 function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB, warnA, warnB }) {
   const righe = [
-    { k: 'base', label: 'BASE' },
-    { k: 'punti', label: 'PUNTI' },
+    { k: 'base',   label: 'BASE'   },
+    { k: 'punti',  label: 'PUNTI'  },
     { k: 'totale', label: 'TOTALE' },
   ];
   return (
@@ -208,10 +164,8 @@ function EditorTabella({ tabella, onSalva, onAnnulla }) {
   const [nome, setNome] = useState(tabella?.nome ?? '');
   const [righe, setRighe] = useState(
     tabella?.righe.map(r => ({
-      min: String(r.min),
-      max: r.max === 99999 ? '' : String(r.max),
-      vpV: String(r.vpV),
-      vpP: String(r.vpP),
+      min: String(r.min), max: r.max === 99999 ? '' : String(r.max),
+      vpV: String(r.vpV), vpP: String(r.vpP),
     })) ?? [{ min: '0', max: '100', vpV: '10', vpP: '10' }]
   );
   const aggiornaRiga = (i, campo, val) => setRighe(prev => { const c = [...prev]; c[i] = { ...c[i], [campo]: val }; return c; });
@@ -220,14 +174,8 @@ function EditorTabella({ tabella, onSalva, onAnnulla }) {
   const salva = () => {
     if (!nome.trim()) { Alert.alert('Errore', 'Inserisci un nome per la tabella.'); return; }
     onSalva({
-      id: tabella?.id ?? String(Date.now()),
-      nome: nome.trim(),
-      righe: righe.map(r => ({
-        min: parseInt(r.min) || 0,
-        max: r.max === '' ? 99999 : parseInt(r.max) || 0,
-        vpV: parseInt(r.vpV) || 0,
-        vpP: parseInt(r.vpP) || 0,
-      })),
+      id: tabella?.id ?? String(Date.now()), nome: nome.trim(),
+      righe: righe.map(r => ({ min: parseInt(r.min) || 0, max: r.max === '' ? 99999 : parseInt(r.max) || 0, vpV: parseInt(r.vpV) || 0, vpP: parseInt(r.vpP) || 0 })),
     });
   };
   return (
@@ -299,31 +247,17 @@ function SchermatImpostazioni({ onTorna }) {
     { text: 'Annulla', style: 'cancel' },
     { text: 'Elimina', style: 'destructive', onPress: async () => { await SecureStore.deleteItemAsync(CHIAVE_STORAGE); setApiKey(''); setSalvata(false); } },
   ]);
-
-  const salvaTabelle = async (nuove) => {
-    setTabelle(nuove);
-    await SecureStore.setItemAsync(TABELLE_STORAGE, JSON.stringify(nuove));
-  };
-  const salvaTabellaAttiva = async (id) => {
-    setTabellaAttivaId(id);
-    await SecureStore.setItemAsync(TABELLA_ATTIVA_STORAGE, id);
-  };
+  const salvaTabelle = async (nuove) => { setTabelle(nuove); await SecureStore.setItemAsync(TABELLE_STORAGE, JSON.stringify(nuove)); };
+  const salvaTabellaAttiva = async (id) => { setTabellaAttivaId(id); await SecureStore.setItemAsync(TABELLA_ATTIVA_STORAGE, id); };
   const onSalvaTabella = async (tab) => {
-    const nuove = tabelle.find(t => t.id === tab.id)
-      ? tabelle.map(t => t.id === tab.id ? tab : t)
-      : [...tabelle, tab];
-    await salvaTabelle(nuove);
-    setEditorTabella(null);
+    const nuove = tabelle.find(t => t.id === tab.id) ? tabelle.map(t => t.id === tab.id ? tab : t) : [...tabelle, tab];
+    await salvaTabelle(nuove); setEditorTabella(null);
   };
   const eliminaTabella = (id) => {
     if (id === 'default') { Alert.alert('Errore', 'La tabella Standard non può essere eliminata.'); return; }
     Alert.alert('Elimina tabella', 'Sei sicuro?', [
       { text: 'Annulla', style: 'cancel' },
-      { text: 'Elimina', style: 'destructive', onPress: async () => {
-        const nuove = tabelle.filter(t => t.id !== id);
-        await salvaTabelle(nuove);
-        if (tabellaAttivaId === id) await salvaTabellaAttiva('default');
-      }},
+      { text: 'Elimina', style: 'destructive', onPress: async () => { const nuove = tabelle.filter(t => t.id !== id); await salvaTabelle(nuove); if (tabellaAttivaId === id) await salvaTabellaAttiva('default'); } },
     ]);
   };
 
@@ -337,10 +271,10 @@ function SchermatImpostazioni({ onTorna }) {
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={s.header}><Text style={s.titolo}>BURRACO</Text><Text style={s.sottotitolo}>Impostazioni</Text></View>
 
-        {/* ── API Key ── */}
+        {/* API Key */}
         <View style={s.card}>
           <Text style={s.cardTitolo}>API Key Anthropic</Text>
-          <Text style={s.testo}>Necessaria per l'analisi OCR delle foto. Costo per analisi {'<'} 1 centesimo. Ottieni la chiave su console.anthropic.com</Text>
+          <Text style={s.testo}>Necessaria per l'analisi OCR delle foto. Costo {'<'} 1 centesimo per analisi. Ottieni la chiave su console.anthropic.com</Text>
           <Text style={s.inputLabel}>La tua API Key</Text>
           <TextInput style={s.inputNome} value={apiKey} onChangeText={v => { setApiKey(v); setSalvata(false); }}
             placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
@@ -351,11 +285,19 @@ function SchermatImpostazioni({ onTorna }) {
           </View>
         </View>
 
-        {/* ── Tabelle VP ── */}
+        {/* Dettatura */}
+        <View style={s.card}>
+          <Text style={s.cardTitolo}>Dettatura vocale</Text>
+          <Text style={s.testo}>
+            Tocca 🎤 accanto a un campo per aprire la tastiera, poi usa il microfono integrato nella tastiera Android per dettare il numero.{'\n\n'}
+            Se la tua tastiera non mostra il microfono, attivalo nelle impostazioni della tastiera del telefono.
+          </Text>
+        </View>
+
+        {/* Tabelle VP */}
         <View style={s.card}>
           <Text style={s.cardTitolo}>Tabelle Victory Points</Text>
           <Text style={s.testo}>Seleziona la tabella da usare. Puoi modificarla o aggiungerne di nuove.</Text>
-
           {tabelle.map(t => (
             <View key={t.id} style={s.rigaTabella}>
               <TouchableOpacity style={s.radioBtnWrap} onPress={() => salvaTabellaAttiva(t.id)}>
@@ -363,14 +305,8 @@ function SchermatImpostazioni({ onTorna }) {
                 <Text style={[s.nomeTabellaT, tabellaAttivaId === t.id && { color: '#1a1a2e', fontWeight: 'bold' }]}>{t.nome}</Text>
               </TouchableOpacity>
               <View style={{ flexDirection: 'row', gap: 6 }}>
-                <TouchableOpacity onPress={() => setEditorTabella(t)} style={s.btnTabAzione}>
-                  <Text style={{ color: '#7a6a55', fontSize: 12 }}>✏ Modifica</Text>
-                </TouchableOpacity>
-                {t.id !== 'default' && (
-                  <TouchableOpacity onPress={() => eliminaTabella(t.id)} style={s.btnTabAzione}>
-                    <Text style={{ color: '#e74c3c', fontSize: 12 }}>✕</Text>
-                  </TouchableOpacity>
-                )}
+                <TouchableOpacity onPress={() => setEditorTabella(t)} style={s.btnTabAzione}><Text style={{ color: '#7a6a55', fontSize: 12 }}>✏ Modifica</Text></TouchableOpacity>
+                {t.id !== 'default' && <TouchableOpacity onPress={() => eliminaTabella(t.id)} style={s.btnTabAzione}><Text style={{ color: '#e74c3c', fontSize: 12 }}>✕</Text></TouchableOpacity>}
               </View>
             </View>
           ))}
@@ -385,7 +321,7 @@ function SchermatImpostazioni({ onTorna }) {
             </View>
             {tabellaAttiva.righe.map((r, i) => (
               <View key={i} style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: '#f0e8d8', backgroundColor: i % 2 === 0 ? '#fff' : '#fdfaf5' }}>
-                <Text style={[s.cellTh, { flex: 2 }]}>{r.min} – {r.max === 99999 ? '+2005' : r.max}</Text>
+                <Text style={[s.cellTh, { flex: 2 }]}>{r.min} – {r.max === 99999 ? '2005+' : r.max}</Text>
                 <Text style={[s.cellTh, { flex: 1, color: '#2c5f2e', fontWeight: 'bold' }]}>{r.vpV}</Text>
                 <Text style={[s.cellTh, { flex: 1, color: '#7a2230', fontWeight: 'bold' }]}>{r.vpP}</Text>
               </View>
@@ -405,14 +341,11 @@ function SchermatImpostazioni({ onTorna }) {
   );
 }
 
-// ── Verifica somme ────────────────────────────────────────────────────────────
+// ── Logica verifica ───────────────────────────────────────────────────────────
 function verificaColonna(righe, etichetta) {
-  const errori = [];
-  let totPrec = 0;
+  const errori = []; let totPrec = 0;
   righe.forEach((r, i) => {
-    const b = Number(r.base) || 0;
-    const p = Number(r.punti) || 0;
-    const t = Number(r.totale);
+    const b = Number(r.base) || 0; const p = Number(r.punti) || 0; const t = Number(r.totale);
     const atteso = totPrec + b + p;
     if (r.base === '' && r.punti === '' && r.totale === '') return;
     if (t !== atteso) errori.push({ smazzata: i + 1, colonna: etichetta, scritto: t, atteso });
@@ -434,30 +367,26 @@ function validaValori(righe, etichetta) {
 
 function testoErrori(n) { return n === 1 ? '1 errore trovato' : `${n} errori trovati`; }
 
-async function uriToBase64(uri) {
-  return await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-}
-
 const SYSTEM_PROMPT = `Sei un assistente specializzato nel leggere segnapunti di Burraco tradizionale scritti a mano.
 Il foglio ha due colonne (Coppia A e Coppia B) e 4 smazzate o mani.
 Ogni smazzata ha tre righe: BASE, PUNTI, TOTALE.
 Alla fine ci sono VICTORY POINT per ogni coppia.
 REGOLE: BASE multipli di 50, PUNTI multipli di 5, trattino o slash = 0, segno meno prima o dopo il numero = negativo.
 NON leggere totale finale ne' differenza.
-Restituisci SOLO JSON:
+Restituisci SOLO JSON valido senza markdown:
 {
-  "nomiA": ["nome1", "nome2"], "nomiB": ["nome1", "nome2"],
+  "nomiA": ["nome1","nome2"], "nomiB": ["nome1","nome2"],
   "smazzate": [
-    { "a": { "base": 0, "punti": 0, "totale": 0 }, "b": { "base": 0, "punti": 0, "totale": 0 } },
-    { "a": { "base": 0, "punti": 0, "totale": 0 }, "b": { "base": 0, "punti": 0, "totale": 0 } },
-    { "a": { "base": 0, "punti": 0, "totale": 0 }, "b": { "base": 0, "punti": 0, "totale": 0 } },
-    { "a": { "base": 0, "punti": 0, "totale": 0 }, "b": { "base": 0, "punti": 0, "totale": 0 } }
+    {"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},
+    {"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},
+    {"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},
+    {"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}
   ],
-  "vpA": 0, "vpB": 0
+  "vpA":0,"vpB":0
 }`;
 
 async function estraiDatiDaFoto(uri, apiKey) {
-  const base64 = await uriToBase64(uri);
+  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
   const risposta = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
@@ -520,7 +449,7 @@ function SchermatHome({ onImpostazioni }) {
     return { ok: errori.length === 0, errori, indiciErrA, indiciErrB, erroriRiepilogo, warnA: wA, warnB: wB };
   }, []);
 
-  // Auto-verifica
+  // Auto-verifica ad ogni modifica
   useEffect(() => {
     const hasDati = datiA.some(r => r.base !== '' || r.punti !== '' || r.totale !== '') ||
                     datiB.some(r => r.base !== '' || r.punti !== '' || r.totale !== '');
@@ -581,7 +510,7 @@ function SchermatHome({ onImpostazioni }) {
           <TouchableOpacity style={s.btnImp} onPress={onImpostazioni}><Text style={s.btnImpT}>⚙ Impostazioni</Text></TouchableOpacity>
         </View>
         <View style={s.bannerTabella}>
-          <Text style={s.bannerTabellaT}>📊 Tabella VP: <Text style={{ fontWeight: 'bold' }}>{tabella.nome}</Text></Text>
+          <Text style={s.bannerTabellaT}>📊 Tabella VP: <Text style={{ fontWeight: 'bold' }}>{tabella.nome}</Text>  ·  🎤 Tocca il campo poi usa il mic della tastiera</Text>
         </View>
         <View style={{ padding: 14 }}>
           {stato === 'analisi' ? (
@@ -634,12 +563,10 @@ function SchermatHome({ onImpostazioni }) {
                 <View style={s.rigaErrHeader}><Text style={s.iconaErr}>✗</Text><Text style={s.testoErr}>{testoErrori(ris.errori.length)}</Text></View>
                 {ris.errori.map((e, i) => (
                   <View key={i} style={s.rigaErrore}>
-                    {e.colonna
-                      ? <View style={[s.tag, { backgroundColor: e.colonna === 'A' ? '#2c5f2e' : '#7a2230', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 11 }]}>{e.colonna}</Text></View>
+                    {e.colonna ? <View style={[s.tag, { backgroundColor: e.colonna === 'A' ? '#2c5f2e' : '#7a2230', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 11 }]}>{e.colonna}</Text></View>
                       : <View style={[s.tag, { backgroundColor: '#b8860b', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 9 }]}>!</Text></View>}
                     <View style={{ flex: 1 }}>
-                      {e.desc
-                        ? <Text style={s.errDet}>{e.desc}</Text>
+                      {e.desc ? <Text style={s.errDet}>{e.desc}</Text>
                         : <><Text style={s.errDet}>Mano {e.smazzata} — scritto <Text style={{ fontWeight: 'bold' }}>{e.scritto}</Text>, atteso <Text style={{ fontWeight: 'bold' }}>{e.atteso}</Text></Text>
                            <Text style={s.errDiff}>Differenza: {e.atteso - e.scritto > 0 ? '+' : ''}{e.atteso - e.scritto} punti</Text></>}
                     </View>
@@ -668,7 +595,7 @@ const s = StyleSheet.create({
   btnImp: { marginTop: 10, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: '#d4af3766', borderRadius: 20 },
   btnImpT: { color: '#d4af37', fontSize: 12 },
   bannerTabella: { backgroundColor: '#16213e', borderBottomWidth: 1, borderBottomColor: '#d4af3744', padding: 8, paddingHorizontal: 16 },
-  bannerTabellaT: { color: '#a0a0c0', fontSize: 12 },
+  bannerTabellaT: { color: '#a0a0c0', fontSize: 11 },
   btnRiga: { flexDirection: 'row', gap: 10 },
   btnScan: { flex: 1, backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#d4af37', borderStyle: 'dashed', borderRadius: 12, padding: 18, alignItems: 'center', gap: 4 },
   btnScanIcona: { fontSize: 28 },
@@ -700,8 +627,7 @@ const s = StyleSheet.create({
   input: { borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 2, fontSize: 15, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8', flex: 1 },
   inputErr: { borderColor: '#e74c3c', backgroundColor: '#fff0ee' },
   inputWarn: { borderColor: '#e67e22', backgroundColor: '#fff8ee' },
-  btnMic: { width: 28, height: 32, borderRadius: 6, backgroundColor: '#f0e8d8', alignItems: 'center', justifyContent: 'center' },
-  btnMicAscolto: { backgroundColor: '#e74c3c' },
+  btnMic: { width: 26, height: 30, borderRadius: 5, backgroundColor: '#f0e8d8', alignItems: 'center', justifyContent: 'center' },
   totaleCalc: { fontSize: 18, fontWeight: 'bold', color: '#2a1e12', textAlign: 'center' },
   diffCalc: { fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   diffVuoto: { fontSize: 16, color: '#ccc', textAlign: 'center' },

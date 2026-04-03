@@ -11,20 +11,11 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSCameraUsageDescription": "Serve per fotografare il segnapunti del Burraco.",
-        "NSPhotoLibraryUsageDescription": "Serve per caricare la foto del segnapunti.",
-        "NSSpeechRecognitionUsageDescription": "Serve per dettare i punteggi a voce.",
-        "NSMicrophoneUsageDescription": "Serve per il riconoscimento vocale dei punteggi."
+        "NSPhotoLibraryUsageDescription": "Serve per caricare la foto del segnapunti."
       }
     },
     "android": {
-      "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "RECORD_AUDIO"
-      ]
-    },
-    "plugins": [
-      "@react-native-voice/voice"
-    ]
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"]
+    }
   }
 }

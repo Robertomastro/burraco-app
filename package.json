@@ -12,7 +12,6 @@
     "expo-image-picker": "~16.0.6",
     "expo-secure-store": "~14.0.1",
     "expo-status-bar": "~2.0.1",
-    "@react-native-voice/voice": "^3.2.4",
     "react": "18.3.1",
     "react-native": "0.76.9"
   },
