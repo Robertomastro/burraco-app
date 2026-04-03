@@ -1,4 +1,4 @@
-// Burraco Score - SDK 52 - versione EAS con FileSystem per base64
+// Burraco Score - SDK 52 - calcolo automatico totali + validazione valori
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
@@ -27,19 +27,44 @@ const TABELLA_VP = [
   { min: 2005, max: Infinity, vp: [20, 0] },
 ];
 
-function calcolaVP(diff) {
-  const d = Math.abs(diff);
+function calcolaVP(diffCalcolata) {
+  const d = Math.abs(diffCalcolata);
   const riga = TABELLA_VP.find(r => d >= r.min && d <= r.max);
   if (!riga) return null;
-  // vp[0] = vincente, vp[1] = perdente
-  return diff >= 0 ? { vpA: riga.vp[0], vpB: riga.vp[1] } : { vpA: riga.vp[1], vpB: riga.vp[0] };
+  return diffCalcolata >= 0
+    ? { vpA: riga.vp[0], vpB: riga.vp[1] }
+    : { vpA: riga.vp[1], vpB: riga.vp[0] };
+}
+
+// ── Parsing valore dal segnapunti ─────────────────────────────────────────────
+// Gestisce: numeri interi, negativi (- prima o dopo), trattino = 0
+function parseValore(v) {
+  if (v === null || v === undefined) return 0;
+  const s = String(v).trim();
+  if (s === '' || s === '-' || s === '/' || s === '—' || s === '–') return 0;
+  // Segno meno dopo il numero (es. "100-")
+  if (/^\d+-$/.test(s)) return -parseInt(s, 10);
+  // Numero normale o negativo
+  const n = parseInt(s.replace(/[^0-9\-]/g, ''), 10);
+  return isNaN(n) ? 0 : n;
 }
 
 // ── Prompt OCR ────────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `Sei un assistente specializzato nel leggere segnapunti di Burraco tradizionale.
+const SYSTEM_PROMPT = `Sei un assistente specializzato nel leggere segnapunti di Burraco tradizionale scritti a mano.
 Il foglio ha due colonne (Coppia A e Coppia B) e 4 smazzate o mani.
 Ogni smazzata ha tre righe: BASE, PUNTI, TOTALE.
-Alla fine ci sono: TOTALE A, TOTALE B, DIFF A-B o DIFF B-A, e VICTORY POINT per ogni coppia.
+Alla fine ci sono VICTORY POINT per ogni coppia.
+
+REGOLE IMPORTANTI per la lettura:
+- I valori BASE sono sempre multipli di 50 (es: 0, 50, 100, 150, 200, 250, 300...). Se leggi un numero che non e' multiplo di 50, arrotonda al multiplo di 50 piu' vicino.
+- I valori PUNTI sono sempre multipli di 5 (es: 0, 5, 10, 15, 20...). Se leggi un numero che non e' multiplo di 5, arrotonda al multiplo di 5 piu' vicino.
+- Un trattino orizzontale (-), obliquo (/) o qualsiasi segno che non sia un numero deve essere letto come 0.
+- Il segno meno puo' apparire prima O DOPO il numero (es: "-150" oppure "150-"): entrambi indicano un valore negativo.
+- Fai attenzione a non confondere il numero 1 con la lettera I o il numero 7.
+- Fai attenzione a non confondere il numero 0 con la lettera O.
+- I TOTALI sono somme cumulative: TOTALE1 = BASE1+PUNTI1, TOTALE2 = TOTALE1+BASE2+PUNTI2, ecc.
+- NON leggere i totali finali (TOTALE A, TOTALE B) ne' la DIFFERENZA: saranno calcolati automaticamente.
+
 Restituisci SOLO un oggetto JSON valido, senza markdown, senza testo aggiuntivo:
 {
   "nomiA": ["nome1", "nome2"],
@@ -50,16 +75,21 @@ Restituisci SOLO un oggetto JSON valido, senza markdown, senza testo aggiuntivo:
     { "a": { "base": 0, "punti": 0, "totale": 0 }, "b": { "base": 0, "punti": 0, "totale": 0 } },
     { "a": { "base": 0, "punti": 0, "totale": 0 }, "b": { "base": 0, "punti": 0, "totale": 0 } }
   ],
-  "totaleA": 0,
-  "totaleB": 0,
-  "diffAB": 0,
   "vpA": 0,
   "vpB": 0
 }
-Regole: campi vuoti o illeggibili -> 0. Nomi non visibili -> "". Solo JSON, nulla altro.
-diffAB e' il valore della differenza scritto sul foglio (sempre positivo). vpA e vpB sono i victory point scritti sul foglio.`;
+Nomi non visibili -> "". Solo JSON, nulla altro.`;
 
-// ── Verifica somme ────────────────────────────────────────────────────────────
+// ── Calcola totale cumulativo di una colonna ──────────────────────────────────
+function calcolaTotaleColonna(righe) {
+  let tot = 0;
+  righe.forEach(r => {
+    tot += (Number(r.base) || 0) + (Number(r.punti) || 0);
+  });
+  return tot;
+}
+
+// ── Verifica somme mano per mano ──────────────────────────────────────────────
 function verificaColonna(righe, etichetta) {
   const errori = [];
   let totPrec = 0;
@@ -75,12 +105,27 @@ function verificaColonna(righe, etichetta) {
   return errori;
 }
 
+// ── Validazione BASE (multipli di 50) e PUNTI (multipli di 5) ────────────────
+function validaValori(righe, etichetta) {
+  const errori = [];
+  righe.forEach((r, i) => {
+    if (r.base !== '' && r.base !== '0') {
+      const b = Math.abs(Number(r.base));
+      if (b % 50 !== 0) errori.push({ smazzata: i + 1, colonna: etichetta, tipo: 'BASE', valore: r.base });
+    }
+    if (r.punti !== '' && r.punti !== '0') {
+      const p = Math.abs(Number(r.punti));
+      if (p % 5 !== 0) errori.push({ smazzata: i + 1, colonna: etichetta, tipo: 'PUNTI', valore: r.punti });
+    }
+  });
+  return errori;
+}
+
 function testoErrori(n) { return n === 1 ? '1 errore trovato' : `${n} errori trovati`; }
 
 // ── Legge file come base64 ────────────────────────────────────────────────────
 async function uriToBase64(uri) {
-  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-  return base64;
+  return await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
 }
 
 // ── Chiamata API Anthropic Vision ─────────────────────────────────────────────
@@ -95,7 +140,7 @@ async function estraiDatiDaFoto(uri, apiKey) {
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Estrai tutti i punteggi da questo segnapunti di Burraco.' },
+        { type: 'text', text: 'Estrai con la massima precisione tutti i punteggi da questo segnapunti di Burraco scritto a mano.' },
       ]}],
     }),
   });
@@ -105,16 +150,17 @@ async function estraiDatiDaFoto(uri, apiKey) {
   return JSON.parse(testo.replace(/```json|```/g, '').trim());
 }
 
-// ── Campo numerico ────────────────────────────────────────────────────────────
-function Campo({ value, onChange, errore }) {
+// ── Campo numerico con validazione colore ─────────────────────────────────────
+function Campo({ value, onChange, errore, warn }) {
   return (
-    <TextInput keyboardType="number-pad" value={value} onChangeText={onChange}
-      style={[s.input, errore && s.inputErr]} placeholder="—" placeholderTextColor="#bbb" selectTextOnFocus />
+    <TextInput keyboardType="numbers-and-punctuation" value={value} onChangeText={onChange}
+      style={[s.input, errore && s.inputErr, warn && !errore && s.inputWarn]}
+      placeholder="—" placeholderTextColor="#bbb" selectTextOnFocus />
   );
 }
 
 // ── Blocco singola mano ───────────────────────────────────────────────────────
-function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB }) {
+function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB, warnA, warnB }) {
   const righe = [{ k: 'base', label: 'BASE' }, { k: 'punti', label: 'PUNTI' }, { k: 'totale', label: 'TOTALE' }];
   return (
     <View style={s.blocco}>
@@ -127,8 +173,16 @@ function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB 
       {righe.map(({ k, label }) => (
         <View key={k} style={[s.riga, k === 'totale' && s.rigaTotale]}>
           <Text style={s.rigaLabel}>{label}</Text>
-          <View style={s.col}><Campo value={datiA[k]} onChange={v => onChangeA(idx, k, v)} errore={k === 'totale' && erroriA.includes(idx)} /></View>
-          <View style={s.col}><Campo value={datiB[k]} onChange={v => onChangeB(idx, k, v)} errore={k === 'totale' && erroriB.includes(idx)} /></View>
+          <View style={s.col}>
+            <Campo value={datiA[k]} onChange={v => onChangeA(idx, k, v)}
+              errore={k === 'totale' && erroriA.includes(idx)}
+              warn={k !== 'totale' && warnA.some(w => w.smazzata === idx + 1 && w.tipo === label)} />
+          </View>
+          <View style={s.col}>
+            <Campo value={datiB[k]} onChange={v => onChangeB(idx, k, v)}
+              errore={k === 'totale' && erroriB.includes(idx)}
+              warn={k !== 'totale' && warnB.some(w => w.smazzata === idx + 1 && w.tipo === label)} />
+          </View>
         </View>
       ))}
     </View>
@@ -136,9 +190,13 @@ function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB 
 }
 
 // ── Blocco riepilogo finale ───────────────────────────────────────────────────
-function BloccoRiepilogo({ totaleA, totaleB, diffAB, vpA, vpB, onChangeTotaleA, onChangeTotaleB, onChangeDiff, onChangeVpA, onChangeVpB, erroriRiepilogo }) {
-  const diffCalcolata = Number(totaleA) - Number(totaleB);
-  const vpCalcolati = calcolaVP(diffCalcolata);
+function BloccoRiepilogo({ datiA, datiB, vpA, vpB, onChangeVpA, onChangeVpB, erroriRiepilogo }) {
+  const totA = calcolaTotaleColonna(datiA);
+  const totB = calcolaTotaleColonna(datiB);
+  const diff = totA - totB;
+  const vpCalcolati = calcolaVP(diff);
+
+  const vincenteA = totA >= totB;
 
   return (
     <View style={s.blocco}>
@@ -149,38 +207,48 @@ function BloccoRiepilogo({ totaleA, totaleB, diffAB, vpA, vpB, onChangeTotaleA, 
         <View style={s.col}><View style={[s.tag, { backgroundColor: '#7a2230' }]}><Text style={s.tagT}>B</Text></View></View>
       </View>
 
-      {/* Totali */}
+      {/* Totali calcolati */}
       <View style={[s.riga, s.rigaTotale]}>
         <Text style={s.rigaLabel}>TOTALE</Text>
-        <View style={s.col}><Campo value={totaleA} onChange={onChangeTotaleA} errore={erroriRiepilogo.totaleA} /></View>
-        <View style={s.col}><Campo value={totaleB} onChange={onChangeTotaleB} errore={erroriRiepilogo.totaleB} /></View>
-      </View>
-
-      {/* Differenza */}
-      <View style={s.riga}>
-        <Text style={s.rigaLabel}>DIFF.</Text>
-        <View style={[s.col, { flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
-          <Campo value={diffAB} onChange={onChangeDiff} errore={erroriRiepilogo.diff} />
+        <View style={s.col}>
+          <Text style={[s.totaleCalc, erroriRiepilogo.totaleA && s.totaleCalcErr]}>{totA}</Text>
         </View>
         <View style={s.col}>
-          {vpCalcolati && (
-            <Text style={[s.suggerimento, { color: diffCalcolata >= 0 ? '#2c5f2e' : '#7a2230' }]}>
-              calc: {Math.abs(diffCalcolata)}
-            </Text>
-          )}
+          <Text style={[s.totaleCalc, erroriRiepilogo.totaleB && s.totaleCalcErr]}>{totB}</Text>
         </View>
       </View>
 
-      {/* Victory Points */}
-      <View style={[s.riga, s.rigaTotale]}>
-        <Text style={s.rigaLabel}>V.P.</Text>
-        <View style={s.col}><Campo value={vpA} onChange={onChangeVpA} errore={erroriRiepilogo.vpA} /></View>
-        <View style={s.col}><Campo value={vpB} onChange={onChangeVpB} errore={erroriRiepilogo.vpB} /></View>
+      {/* Differenza sotto il totale maggiore */}
+      <View style={s.riga}>
+        <Text style={s.rigaLabel}>DIFF.</Text>
+        <View style={s.col}>
+          {vincenteA
+            ? <Text style={[s.diffCalc, { color: '#2c5f2e' }]}>{Math.abs(diff)}</Text>
+            : <Text style={s.diffVuoto}>—</Text>
+          }
+        </View>
+        <View style={s.col}>
+          {!vincenteA
+            ? <Text style={[s.diffCalc, { color: '#7a2230' }]}>{Math.abs(diff)}</Text>
+            : <Text style={s.diffVuoto}>—</Text>
+          }
+        </View>
       </View>
 
-      {/* VP attesi */}
+      {/* Victory Points scritti */}
+      <View style={[s.riga, s.rigaTotale]}>
+        <Text style={s.rigaLabel}>V.P. scritti</Text>
+        <View style={s.col}>
+          <Campo value={vpA} onChange={onChangeVpA} errore={erroriRiepilogo.vpA} />
+        </View>
+        <View style={s.col}>
+          <Campo value={vpB} onChange={onChangeVpB} errore={erroriRiepilogo.vpB} />
+        </View>
+      </View>
+
+      {/* Victory Points calcolati */}
       {vpCalcolati && (
-        <View style={[s.riga, { backgroundColor: '#f5f0e8' }]}>
+        <View style={[s.riga, { backgroundColor: '#f0f8f0' }]}>
           <Text style={s.rigaLabel}>V.P. calc.</Text>
           <View style={s.col}><Text style={[s.vpCalc, { color: '#2c5f2e' }]}>{vpCalcolati.vpA}</Text></View>
           <View style={s.col}><Text style={[s.vpCalc, { color: '#7a2230' }]}>{vpCalcolati.vpB}</Text></View>
@@ -237,9 +305,6 @@ function SchermatHome({ onImpostazioni }) {
   const [nomiB, setNomiB] = useState(['', '']);
   const [datiA, setDatiA] = useState(vuoto());
   const [datiB, setDatiB] = useState(vuoto());
-  const [totaleA, setTotaleA] = useState('');
-  const [totaleB, setTotaleB] = useState('');
-  const [diffAB, setDiffAB] = useState('');
   const [vpA, setVpA] = useState('');
   const [vpB, setVpB] = useState('');
   const [risultato, setRisultato] = useState(null);
@@ -248,38 +313,58 @@ function SchermatHome({ onImpostazioni }) {
   const [erroreMsg, setErroreMsg] = useState('');
   const [apiKey, setApiKey] = useState(null);
 
-  useEffect(() => { const carica = () => SecureStore.getItemAsync(CHIAVE_STORAGE).then(k => setApiKey(k ?? null)); carica(); const t = setInterval(carica, 1500); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    const carica = () => SecureStore.getItemAsync(CHIAVE_STORAGE).then(k => setApiKey(k ?? null));
+    carica();
+    const t = setInterval(carica, 1500);
+    return () => clearInterval(t);
+  }, []);
 
-  const calcolaRisultato = (a, b, tA, tB, diff, vA, vB) => {
+  const calcolaRisultato = (a, b, vA, vB) => {
     const errori = [];
     const indiciErrA = [];
     const indiciErrB = [];
 
-    // Verifica somme mani
-    const ea = verificaColonna(a, 'A');
-    const eb = verificaColonna(b, 'B');
-    ea.forEach(e => { errori.push(e); indiciErrA.push(e.smazzata - 1); });
-    eb.forEach(e => { errori.push(e); indiciErrB.push(e.smazzata - 1); });
+    // Verifica somme mano per mano
+    verificaColonna(a, 'A').forEach(e => { errori.push(e); indiciErrA.push(e.smazzata - 1); });
+    verificaColonna(b, 'B').forEach(e => { errori.push(e); indiciErrB.push(e.smazzata - 1); });
 
-    // Verifica totali finali
-    const ultimoTotA = Number(a[3].totale) || 0;
-    const ultimoTotB = Number(b[3].totale) || 0;
-    const erroriRiepilogo = { totaleA: false, totaleB: false, diff: false, vpA: false, vpB: false };
+    // Verifica validità BASE e PUNTI
+    const warnA = validaValori(a, 'A');
+    const warnB = validaValori(b, 'B');
+    warnA.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia A: ${w.tipo} = ${w.valore} non è un multiplo valido` }));
+    warnB.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia B: ${w.tipo} = ${w.valore} non è un multiplo valido` }));
 
-    if (tA !== '' && Number(tA) !== ultimoTotA) { errori.push({ desc: `Totale A scritto ${tA}, atteso ${ultimoTotA}` }); erroriRiepilogo.totaleA = true; }
-    if (tB !== '' && Number(tB) !== ultimoTotB) { errori.push({ desc: `Totale B scritto ${tB}, atteso ${ultimoTotB}` }); erroriRiepilogo.totaleB = true; }
+    // Totali calcolati
+    const totA = calcolaTotaleColonna(a);
+    const totB = calcolaTotaleColonna(b);
 
-    // Verifica differenza
-    const diffCalcolata = ultimoTotA - ultimoTotB;
-    const diffScritta = Number(diff) || 0;
-    if (diff !== '' && diffScritta !== Math.abs(diffCalcolata)) { errori.push({ desc: `Differenza scritta ${diffScritta}, attesa ${Math.abs(diffCalcolata)}` }); erroriRiepilogo.diff = true; }
+    // Verifica che il TOTALE della mano 4 corrisponda al totale calcolato
+    const erroriRiepilogo = { totaleA: false, totaleB: false, vpA: false, vpB: false };
+    const tot4A = Number(a[3]?.totale);
+    const tot4B = Number(b[3]?.totale);
+    if (a[3]?.totale !== '' && tot4A !== totA) {
+      errori.push({ desc: `Totale mano 4 Coppia A: scritto ${tot4A}, calcolato ${totA}` });
+      erroriRiepilogo.totaleA = true;
+    }
+    if (b[3]?.totale !== '' && tot4B !== totB) {
+      errori.push({ desc: `Totale mano 4 Coppia B: scritto ${tot4B}, calcolato ${totB}` });
+      erroriRiepilogo.totaleB = true;
+    }
 
     // Verifica VP
-    const vpCalcolati = calcolaVP(diffCalcolata);
-    if (vpCalcolati && vA !== '' && Number(vA) !== vpCalcolati.vpA) { errori.push({ desc: `VP Coppia A scritto ${vA}, atteso ${vpCalcolati.vpA}` }); erroriRiepilogo.vpA = true; }
-    if (vpCalcolati && vB !== '' && Number(vB) !== vpCalcolati.vpB) { errori.push({ desc: `VP Coppia B scritto ${vB}, atteso ${vpCalcolati.vpB}` }); erroriRiepilogo.vpB = true; }
+    const diff = totA - totB;
+    const vpCalcolati = calcolaVP(diff);
+    if (vpCalcolati && vA !== '' && Number(vA) !== vpCalcolati.vpA) {
+      errori.push({ desc: `VP Coppia A: scritto ${vA}, atteso ${vpCalcolati.vpA}` });
+      erroriRiepilogo.vpA = true;
+    }
+    if (vpCalcolati && vB !== '' && Number(vB) !== vpCalcolati.vpB) {
+      errori.push({ desc: `VP Coppia B: scritto ${vB}, atteso ${vpCalcolati.vpB}` });
+      erroriRiepilogo.vpB = true;
+    }
 
-    return { ok: errori.length === 0, errori, indiciErrA, indiciErrB, erroriRiepilogo };
+    return { ok: errori.length === 0, errori, indiciErrA, indiciErrB, erroriRiepilogo, warnA, warnB };
   };
 
   const aggiorna = useCallback((setter, idx, campo, valore) => {
@@ -288,26 +373,28 @@ function SchermatHome({ onImpostazioni }) {
   }, []);
 
   const controllaApiKey = () => {
-    if (!apiKey) { Alert.alert('API Key mancante', 'Configura la tua API key nelle impostazioni.', [{ text: 'Impostazioni', onPress: onImpostazioni }, { text: 'Annulla' }]); return false; }
+    if (!apiKey) {
+      Alert.alert('API Key mancante', 'Configura la tua API key nelle impostazioni.',
+        [{ text: 'Impostazioni', onPress: onImpostazioni }, { text: 'Annulla' }]);
+      return false;
+    }
     return true;
   };
 
   const scattaFoto = async () => {
     if (!controllaApiKey()) return;
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permesso negato', "Vai nelle impostazioni del telefono e consenti l'accesso alla fotocamera per questa app."); return; }
+    if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera nelle impostazioni del telefono."); return; }
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.85, base64: false });
-    if (!res.canceled) elaboraFoto(res.assets[0].uri);
+    if (!res.canceled && res.assets?.[0]?.uri) elaboraFoto(res.assets[0].uri);
   };
 
   const caricaDaLibreria = async () => {
     if (!controllaApiKey()) return;
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permesso negato', "Vai nelle impostazioni del telefono e consenti l'accesso alla galleria per questa app."); return; }
+    if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla galleria nelle impostazioni del telefono."); return; }
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85, base64: false });
-    // Debug temporaneo
-    Alert.alert('DEBUG', `canceled: ${res.canceled}\nassets: ${JSON.stringify(res.assets?.length)}\nuri: ${res.assets?.[0]?.uri ?? 'nessuna'}`);
-    if (!res.canceled) elaboraFoto(res.assets[0].uri);
+    if (!res.canceled && res.assets?.[0]?.uri) elaboraFoto(res.assets[0].uri);
   };
 
   const elaboraFoto = async (uri) => {
@@ -317,37 +404,47 @@ function SchermatHome({ onImpostazioni }) {
     setErroreMsg('');
     try {
       const dati = await estraiDatiDaFoto(uri, apiKey);
-      const toStr = v => (!v || v === 0) ? '' : String(v);
-      const nuoviA = dati.smazzate.map(sm => ({ base: toStr(sm.a.base), punti: toStr(sm.a.punti), totale: toStr(sm.a.totale) }));
-      const nuoviB = dati.smazzate.map(sm => ({ base: toStr(sm.b.base), punti: toStr(sm.b.punti), totale: toStr(sm.b.totale) }));
-      const nTA = toStr(dati.totaleA);
-      const nTB = toStr(dati.totaleB);
-      const nDiff = toStr(dati.diffAB);
+      const toStr = v => {
+        const n = parseValore(v);
+        return n === 0 ? '0' : String(n);
+      };
+      const nuoviA = dati.smazzate.map(sm => ({
+        base: toStr(sm.a.base), punti: toStr(sm.a.punti), totale: toStr(sm.a.totale)
+      }));
+      const nuoviB = dati.smazzate.map(sm => ({
+        base: toStr(sm.b.base), punti: toStr(sm.b.punti), totale: toStr(sm.b.totale)
+      }));
       const nVpA = toStr(dati.vpA);
       const nVpB = toStr(dati.vpB);
       setNomiA(dati.nomiA?.length ? dati.nomiA : ['', '']);
       setNomiB(dati.nomiB?.length ? dati.nomiB : ['', '']);
       setDatiA(nuoviA); setDatiB(nuoviB);
-      setTotaleA(nTA); setTotaleB(nTB);
-      setDiffAB(nDiff); setVpA(nVpA); setVpB(nVpB);
-      setRisultato(calcolaRisultato(nuoviA, nuoviB, nTA, nTB, nDiff, nVpA, nVpB));
+      setVpA(nVpA); setVpB(nVpB);
+      setRisultato(calcolaRisultato(nuoviA, nuoviB, nVpA, nVpB));
       setStato('fatto');
-    } catch (e) { setStato('errore'); setErroreMsg(e.message); }
+    } catch (e) {
+      setStato('errore');
+      setErroreMsg(e.message);
+    }
   };
 
-  const verifica = () => setRisultato(calcolaRisultato(datiA, datiB, totaleA, totaleB, diffAB, vpA, vpB));
+  const verifica = () => setRisultato(calcolaRisultato(datiA, datiB, vpA, vpB));
 
   const reset = () => {
     setDatiA(vuoto()); setDatiB(vuoto());
     setNomiA(['', '']); setNomiB(['', '']);
-    setTotaleA(''); setTotaleB(''); setDiffAB(''); setVpA(''); setVpB('');
-    setRisultato(null); setAnteprima(null); setStato('idle'); setErroreMsg('');
+    setVpA(''); setVpB('');
+    setRisultato(null); setAnteprima(null);
+    setStato('idle'); setErroreMsg('');
   };
+
+  const ris = risultato;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
       <StatusBar style="light" />
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+
         <View style={s.header}>
           <Text style={s.titolo}>BURRACO</Text>
           <Text style={s.sottotitolo}>Verifica Punteggi</Text>
@@ -367,18 +464,29 @@ function SchermatHome({ onImpostazioni }) {
             </View>
           ) : (
             <View style={s.btnRiga}>
-              <TouchableOpacity style={s.btnScan} onPress={scattaFoto}><Text style={s.btnScanIcona}>📷</Text><Text style={s.btnScanT}>Fotocamera</Text></TouchableOpacity>
-              <TouchableOpacity style={s.btnScan} onPress={caricaDaLibreria}><Text style={s.btnScanIcona}>🖼</Text><Text style={s.btnScanT}>Libreria</Text></TouchableOpacity>
+              <TouchableOpacity style={s.btnScan} onPress={scattaFoto}>
+                <Text style={s.btnScanIcona}>📷</Text><Text style={s.btnScanT}>Fotocamera</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.btnScan} onPress={caricaDaLibreria}>
+                <Text style={s.btnScanIcona}>🖼</Text><Text style={s.btnScanT}>Libreria</Text>
+              </TouchableOpacity>
             </View>
           )}
           {stato === 'errore' && <View style={s.erroreApi}><Text style={s.erroreApiT}>⚠ {erroreMsg}</Text></View>}
         </View>
 
         <View style={s.nomiSection}>
-          {[{ label: 'COPPIA A', nomi: nomiA, setNomi: setNomiA, colore: '#2c5f2e' }, { label: 'COPPIA B', nomi: nomiB, setNomi: setNomiB, colore: '#7a2230' }].map(({ label, nomi, setNomi, colore }) => (
+          {[
+            { label: 'COPPIA A', nomi: nomiA, setNomi: setNomiA, colore: '#2c5f2e' },
+            { label: 'COPPIA B', nomi: nomiB, setNomi: setNomiB, colore: '#7a2230' },
+          ].map(({ label, nomi, setNomi, colore }) => (
             <View key={label} style={s.nomiCol}>
               <Text style={[s.nomiHead, { color: colore }]}>{label}</Text>
-              {[0, 1].map(i => <TextInput key={i} style={s.inputNome} value={nomi[i]} onChangeText={v => { const n = [...nomi]; n[i] = v; setNomi(n); }} placeholder={`Giocatore ${i + 1}`} placeholderTextColor="#b0a080" />)}
+              {[0, 1].map(i => (
+                <TextInput key={i} style={s.inputNome} value={nomi[i]}
+                  onChangeText={v => { const n = [...nomi]; n[i] = v; setNomi(n); }}
+                  placeholder={`Giocatore ${i + 1}`} placeholderTextColor="#b0a080" />
+              ))}
             </View>
           ))}
         </View>
@@ -388,17 +496,15 @@ function SchermatHome({ onImpostazioni }) {
             <BloccoMano key={i} idx={i} datiA={datiA[i]} datiB={datiB[i]}
               onChangeA={(idx, k, v) => aggiorna(setDatiA, idx, k, v)}
               onChangeB={(idx, k, v) => aggiorna(setDatiB, idx, k, v)}
-              erroriA={risultato?.indiciErrA ?? []} erroriB={risultato?.indiciErrB ?? []} />
+              erroriA={ris?.indiciErrA ?? []} erroriB={ris?.indiciErrB ?? []}
+              warnA={ris?.warnA ?? []} warnB={ris?.warnB ?? []} />
           ))}
 
           <BloccoRiepilogo
-            totaleA={totaleA} totaleB={totaleB} diffAB={diffAB} vpA={vpA} vpB={vpB}
-            onChangeTotaleA={v => { setTotaleA(v); setRisultato(null); }}
-            onChangeTotaleB={v => { setTotaleB(v); setRisultato(null); }}
-            onChangeDiff={v => { setDiffAB(v); setRisultato(null); }}
+            datiA={datiA} datiB={datiB} vpA={vpA} vpB={vpB}
             onChangeVpA={v => { setVpA(v); setRisultato(null); }}
             onChangeVpB={v => { setVpB(v); setRisultato(null); }}
-            erroriRiepilogo={risultato?.erroriRiepilogo ?? {}}
+            erroriRiepilogo={ris?.erroriRiepilogo ?? {}}
           />
         </View>
 
@@ -407,24 +513,41 @@ function SchermatHome({ onImpostazioni }) {
           <TouchableOpacity style={s.btnVerifica} onPress={verifica}><Text style={s.btnVerificaT}>✓ Verifica</Text></TouchableOpacity>
         </View>
 
-        {risultato && (
-          <View style={[s.risultatoBox, risultato.ok ? s.boxOk : s.boxErr]}>
-            {risultato.ok ? (
-              <View style={s.rigaOk}><Text style={s.iconaOk}>✓</Text><View><Text style={s.testoOk}>Tutto corretto!</Text><Text style={s.subOk}>Somme, differenza e Victory Point verificati.</Text></View></View>
+        {ris && (
+          <View style={[s.risultatoBox, ris.ok ? s.boxOk : s.boxErr]}>
+            {ris.ok ? (
+              <View style={s.rigaOk}>
+                <Text style={s.iconaOk}>✓</Text>
+                <View>
+                  <Text style={s.testoOk}>Tutto corretto!</Text>
+                  <Text style={s.subOk}>Somme, differenza e Victory Point verificati.</Text>
+                </View>
+              </View>
             ) : (
               <View>
-                <View style={s.rigaErrHeader}><Text style={s.iconaErr}>✗</Text><Text style={s.testoErr}>{testoErrori(risultato.errori.length)}</Text></View>
-                {risultato.errori.map((e, i) => (
+                <View style={s.rigaErrHeader}>
+                  <Text style={s.iconaErr}>✗</Text>
+                  <Text style={s.testoErr}>{testoErrori(ris.errori.length)}</Text>
+                </View>
+                {ris.errori.map((e, i) => (
                   <View key={i} style={s.rigaErrore}>
                     {e.colonna ? (
                       <View style={[s.tag, { backgroundColor: e.colonna === 'A' ? '#2c5f2e' : '#7a2230', width: 20, height: 20 }]}>
                         <Text style={[s.tagT, { fontSize: 11 }]}>{e.colonna}</Text>
                       </View>
-                    ) : <View style={[s.tag, { backgroundColor: '#b8860b', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 9 }]}>!</Text></View>}
-                    <View>
-                      {e.desc ? <Text style={s.errDet}>{e.desc}</Text> : (
+                    ) : (
+                      <View style={[s.tag, { backgroundColor: '#b8860b', width: 20, height: 20 }]}>
+                        <Text style={[s.tagT, { fontSize: 9 }]}>!</Text>
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      {e.desc ? (
+                        <Text style={s.errDet}>{e.desc}</Text>
+                      ) : (
                         <>
-                          <Text style={s.errDet}>Mano {e.smazzata} — scritto <Text style={{ fontWeight: 'bold' }}>{e.scritto}</Text>, atteso <Text style={{ fontWeight: 'bold' }}>{e.atteso}</Text></Text>
+                          <Text style={s.errDet}>
+                            Mano {e.smazzata} — scritto <Text style={{ fontWeight: 'bold' }}>{e.scritto}</Text>, atteso <Text style={{ fontWeight: 'bold' }}>{e.atteso}</Text>
+                          </Text>
                           <Text style={s.errDiff}>Differenza: {e.atteso - e.scritto > 0 ? '+' : ''}{e.atteso - e.scritto} punti</Text>
                         </>
                       )}
@@ -435,17 +558,20 @@ function SchermatHome({ onImpostazioni }) {
             )}
           </View>
         )}
+
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+// ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [schermata, setSchermata] = useState('home');
   if (schermata === 'impostazioni') return <SchermatImpostazioni onTorna={() => setSchermata('home')} />;
   return <SchermatHome onImpostazioni={() => setSchermata('impostazioni')} />;
 }
 
+// ── Stili ─────────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   centrato: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5efe6' },
   header: { backgroundColor: '#1a1a2e', paddingTop: 20, paddingBottom: 14, alignItems: 'center' },
@@ -482,7 +608,11 @@ const s = StyleSheet.create({
   rigaLabel: { width: 54, fontSize: 9, letterSpacing: 1, color: '#9a8a75', fontWeight: 'bold', textTransform: 'uppercase' },
   input: { borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 4, fontSize: 16, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8', width: '92%' },
   inputErr: { borderColor: '#e74c3c', backgroundColor: '#fff0ee' },
-  suggerimento: { fontSize: 11, fontStyle: 'italic' },
+  inputWarn: { borderColor: '#e67e22', backgroundColor: '#fff8ee' },
+  totaleCalc: { fontSize: 18, fontWeight: 'bold', color: '#2a1e12', textAlign: 'center' },
+  totaleCalcErr: { color: '#e74c3c' },
+  diffCalc: { fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  diffVuoto: { fontSize: 16, color: '#ccc', textAlign: 'center' },
   vpCalc: { fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
   pulsanti: { flexDirection: 'row', gap: 10, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   btnVerifica: { flex: 2, backgroundColor: '#1a1a2e', borderRadius: 10, padding: 14, alignItems: 'center', elevation: 4 },
@@ -500,7 +630,7 @@ const s = StyleSheet.create({
   iconaErr: { fontSize: 24, color: '#e74c3c', fontWeight: 'bold' },
   testoErr: { fontSize: 14, color: '#c0392b', fontWeight: 'bold' },
   rigaErrore: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
-  errDet: { fontSize: 13, color: '#5a2020' },
+  errDet: { fontSize: 13, color: '#5a2020', flex: 1, flexWrap: 'wrap' },
   errDiff: { fontSize: 11, color: '#c0392b', marginTop: 2 },
   card: { margin: 16, backgroundColor: '#fff', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#ddd0b8' },
   cardTitolo: { fontSize: 13, fontWeight: 'bold', color: '#3a2e22', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 },
