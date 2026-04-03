@@ -6,27 +6,25 @@
     "sdkVersion": "52.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "splash": {
-      "backgroundColor": "#1a1a2e"
-    },
+    "splash": { "backgroundColor": "#1a1a2e" },
     "ios": {
       "supportsTablet": false,
       "infoPlist": {
         "NSCameraUsageDescription": "Serve per fotografare il segnapunti del Burraco.",
-        "NSPhotoLibraryUsageDescription": "Serve per caricare la foto del segnapunti."
+        "NSPhotoLibraryUsageDescription": "Serve per caricare la foto del segnapunti.",
+        "NSSpeechRecognitionUsageDescription": "Serve per dettare i punteggi a voce.",
+        "NSMicrophoneUsageDescription": "Serve per il riconoscimento vocale dei punteggi."
       }
     },
     "android": {
       "permissions": [
         "CAMERA",
-        "READ_EXTERNAL_STORAGE"
-      ],
-      "package": "com.robertomastro.burracoapp"
+        "READ_EXTERNAL_STORAGE",
+        "RECORD_AUDIO"
+      ]
     },
-    "extra": {
-      "eas": {
-        "projectId": "e8d40e18-d0e6-4989-b85c-f09963cd0b9f"
-      }
-    }
+    "plugins": [
+      "@react-native-voice/voice"
+    ]
   }
 }
