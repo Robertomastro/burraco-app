@@ -6,9 +6,7 @@
     "sdkVersion": "52.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "splash": {
-      "backgroundColor": "#1a1a2e"
-    },
+    "splash": { "backgroundColor": "#1a1a2e" },
     "ios": {
       "supportsTablet": false,
       "infoPlist": {
@@ -17,16 +15,7 @@
       }
     },
     "android": {
-      "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE"
-      ],
-      "package": "com.robertomastro.burracoapp"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "e8d40e18-d0e6-4989-b85c-f09963cd0b9f"
-      }
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"]
     }
   }
 }
