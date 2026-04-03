@@ -1,7 +1,5 @@
 // Burraco Score - SDK 52
-// La dettatura vocale funziona tramite il microfono integrato nella tastiera Android.
-// Tocca il campo, poi tocca 🎤 sulla tastiera per dettare il numero.
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Alert, ActivityIndicator, Image, SafeAreaView,
@@ -53,31 +51,31 @@ function parseValore(v) {
   return isNaN(n) ? 0 : n;
 }
 
-// ── Campo con pulsante microfono ──────────────────────────────────────────────
-// Il microfono focalizza il campo: l'utente usa il 🎤 integrato nella tastiera Android
-function Campo({ value, onChange, errore, warn, inputRef: externalRef }) {
-  const internalRef = useRef(null);
-  const ref = externalRef || internalRef;
-
-  const focusPerVoce = () => {
-    ref.current?.focus();
+// ── Campo numerico con toggle segno +/- ──────────────────────────────────────
+function Campo({ value, onChange, errore, warn }) {
+  const toggleSegno = () => {
+    const n = parseInt(value, 10);
+    if (!isNaN(n) && n !== 0) onChange(String(-n));
   };
 
   return (
     <View style={s.campoWrap}>
+      <TouchableOpacity onPress={toggleSegno} style={s.btnSegno}>
+        <Text style={s.btnSegnoT}>{value && value.startsWith('-') ? '−' : '+'}</Text>
+      </TouchableOpacity>
       <TextInput
-        ref={ref}
-        keyboardType="numbers-and-punctuation"
-        value={value}
-        onChangeText={onChange}
+        keyboardType="number-pad"
+        value={value.replace('-', '')}
+        onChangeText={v => {
+          const cifre = v.replace(/[^0-9]/g, '');
+          const negativo = value.startsWith('-');
+          onChange(cifre === '' ? '' : (negativo ? '-' + cifre : cifre));
+        }}
         style={[s.input, errore && s.inputErr, warn && !errore && s.inputWarn]}
         placeholder="—"
         placeholderTextColor="#bbb"
         selectTextOnFocus
       />
-      <TouchableOpacity onPress={focusPerVoce} style={s.btnMic}>
-        <Text style={{ fontSize: 13 }}>🎤</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -270,8 +268,6 @@ function SchermatImpostazioni({ onTorna }) {
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={s.header}><Text style={s.titolo}>BURRACO</Text><Text style={s.sottotitolo}>Impostazioni</Text></View>
-
-        {/* API Key */}
         <View style={s.card}>
           <Text style={s.cardTitolo}>API Key Anthropic</Text>
           <Text style={s.testo}>Necessaria per l'analisi OCR delle foto. Costo {'<'} 1 centesimo per analisi. Ottieni la chiave su console.anthropic.com</Text>
@@ -284,17 +280,6 @@ function SchermatImpostazioni({ onTorna }) {
             {salvata && <TouchableOpacity style={[s.btnReset, { borderColor: '#e74c3c' }]} onPress={eliminaApiKey}><Text style={[s.btnResetT, { color: '#e74c3c' }]}>Elimina</Text></TouchableOpacity>}
           </View>
         </View>
-
-        {/* Dettatura */}
-        <View style={s.card}>
-          <Text style={s.cardTitolo}>Dettatura vocale</Text>
-          <Text style={s.testo}>
-            Tocca 🎤 accanto a un campo per aprire la tastiera, poi usa il microfono integrato nella tastiera Android per dettare il numero.{'\n\n'}
-            Se la tua tastiera non mostra il microfono, attivalo nelle impostazioni della tastiera del telefono.
-          </Text>
-        </View>
-
-        {/* Tabelle VP */}
         <View style={s.card}>
           <Text style={s.cardTitolo}>Tabelle Victory Points</Text>
           <Text style={s.testo}>Seleziona la tabella da usare. Puoi modificarla o aggiungerne di nuove.</Text>
@@ -310,8 +295,6 @@ function SchermatImpostazioni({ onTorna }) {
               </View>
             </View>
           ))}
-
-          {/* Anteprima tabella attiva */}
           <View style={{ marginTop: 14 }}>
             <Text style={[s.inputLabel, { marginBottom: 8 }]}>Fasce: {tabellaAttiva.nome}</Text>
             <View style={{ flexDirection: 'row', marginBottom: 4, paddingHorizontal: 4 }}>
@@ -327,12 +310,10 @@ function SchermatImpostazioni({ onTorna }) {
               </View>
             ))}
           </View>
-
           <TouchableOpacity style={[s.btnVerifica, { marginTop: 14 }]} onPress={() => setEditorTabella('nuova')}>
             <Text style={s.btnVerificaT}>+ Nuova tabella</Text>
           </TouchableOpacity>
         </View>
-
         <TouchableOpacity style={{ padding: 16, alignItems: 'center' }} onPress={onTorna}>
           <Text style={{ color: '#7a6a55', fontSize: 14 }}>← Torna all'app</Text>
         </TouchableOpacity>
@@ -375,8 +356,8 @@ REGOLE: BASE multipli di 50, PUNTI multipli di 5, trattino o slash = 0, segno me
 NON leggere totale finale ne' differenza.
 Restituisci SOLO JSON valido senza markdown:
 {
-  "nomiA": ["nome1","nome2"], "nomiB": ["nome1","nome2"],
-  "smazzate": [
+  "nomiA":["nome1","nome2"],"nomiB":["nome1","nome2"],
+  "smazzate":[
     {"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},
     {"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},
     {"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},
@@ -449,7 +430,6 @@ function SchermatHome({ onImpostazioni }) {
     return { ok: errori.length === 0, errori, indiciErrA, indiciErrB, erroriRiepilogo, warnA: wA, warnB: wB };
   }, []);
 
-  // Auto-verifica ad ogni modifica
   useEffect(() => {
     const hasDati = datiA.some(r => r.base !== '' || r.punti !== '' || r.totale !== '') ||
                     datiB.some(r => r.base !== '' || r.punti !== '' || r.totale !== '');
@@ -510,7 +490,7 @@ function SchermatHome({ onImpostazioni }) {
           <TouchableOpacity style={s.btnImp} onPress={onImpostazioni}><Text style={s.btnImpT}>⚙ Impostazioni</Text></TouchableOpacity>
         </View>
         <View style={s.bannerTabella}>
-          <Text style={s.bannerTabellaT}>📊 Tabella VP: <Text style={{ fontWeight: 'bold' }}>{tabella.nome}</Text>  ·  🎤 Tocca il campo poi usa il mic della tastiera</Text>
+          <Text style={s.bannerTabellaT}>📊 Tabella VP attiva: <Text style={{ fontWeight: 'bold' }}>{tabella.nome}</Text></Text>
         </View>
         <View style={{ padding: 14 }}>
           {stato === 'analisi' ? (
@@ -624,10 +604,11 @@ const s = StyleSheet.create({
   rigaTotale: { backgroundColor: '#faf6f0', borderTopWidth: 2, borderTopColor: '#e8dcc8' },
   rigaLabel: { width: 54, fontSize: 9, letterSpacing: 1, color: '#9a8a75', fontWeight: 'bold', textTransform: 'uppercase' },
   campoWrap: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'center', gap: 3 },
+  btnSegno: { width: 24, height: 34, borderRadius: 5, backgroundColor: '#1a1a2e', alignItems: 'center', justifyContent: 'center' },
+  btnSegnoT: { color: '#d4af37', fontSize: 16, fontWeight: 'bold', lineHeight: 20 },
   input: { borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 2, fontSize: 15, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8', flex: 1 },
   inputErr: { borderColor: '#e74c3c', backgroundColor: '#fff0ee' },
   inputWarn: { borderColor: '#e67e22', backgroundColor: '#fff8ee' },
-  btnMic: { width: 26, height: 30, borderRadius: 5, backgroundColor: '#f0e8d8', alignItems: 'center', justifyContent: 'center' },
   totaleCalc: { fontSize: 18, fontWeight: 'bold', color: '#2a1e12', textAlign: 'center' },
   diffCalc: { fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   diffVuoto: { fontSize: 16, color: '#ccc', textAlign: 'center' },
