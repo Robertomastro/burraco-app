@@ -16,7 +16,8 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSCameraUsageDescription": "Serve per fotografare il segnapunti del Burraco.",
-        "NSPhotoLibraryUsageDescription": "Serve per caricare la foto del segnapunti."
+        "NSPhotoLibraryUsageDescription": "Serve per caricare la foto del segnapunti.",
+        "NSPhotoLibraryAddUsageDescription": "Serve per salvare le foto del segnapunti nell'album Burraco."
       }
     },
     "android": {
@@ -24,7 +25,22 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#1a9e9e"
       },
-      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"]
-    }
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Consenti l'accesso alle foto per salvare i segnapunti.",
+          "savePhotosPermission": "Consenti il salvataggio delle foto nell'album Burraco.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ]
+    ]
   }
 }

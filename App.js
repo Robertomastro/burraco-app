@@ -7,6 +7,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 import { StatusBar } from 'expo-status-bar';
 
 const CHIAVE_STORAGE = 'anthropic_api_key';
@@ -446,12 +447,38 @@ function SchermatHome({ onImpostazioni }) {
     return true;
   };
 
+  const salvaInAlbumBurraco = async (uri) => {
+    try {
+      // Chiede permesso di scrittura in galleria
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') return;
+
+      // Salva l'asset nella libreria
+      const asset = await MediaLibrary.createAssetAsync(uri);
+
+      // Cerca o crea l'album "Burraco"
+      let album = await MediaLibrary.getAlbumAsync('Burraco');
+      if (album === null) {
+        await MediaLibrary.createAlbumAsync('Burraco', asset, false);
+      } else {
+        await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+      }
+    } catch (_) {
+      // Salvataggio in galleria fallito silenziosamente — non blocca il flusso
+    }
+  };
+
   const scattaFoto = async () => {
     if (!controllaApiKey()) return;
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera."); return; }
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.85, base64: false });
-    if (!res.canceled && res.assets?.[0]?.uri) elaboraFoto(res.assets[0].uri);
+    if (!res.canceled && res.assets?.[0]?.uri) {
+      const uri = res.assets[0].uri;
+      // Salva in galleria nell'album Burraco (in background, non blocca)
+      salvaInAlbumBurraco(uri);
+      elaboraFoto(uri);
+    }
   };
 
   const caricaDaLibreria = async () => {
