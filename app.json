@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Burraco Score",
+    "slug": "burraco-app",
+    "version": "1.0.0",
+    "sdkVersion": "52.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": { "backgroundColor": "#1a1a2e" },
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Serve per fotografare il segnapunti del Burraco.",
+        "NSPhotoLibraryUsageDescription": "Serve per caricare la foto del segnapunti."
+      }
+    },
+    "android": {
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"]
+    }
+  }
+}
