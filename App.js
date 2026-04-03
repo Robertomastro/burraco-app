@@ -1,52 +1,112 @@
-// Burraco Score - SDK 52 - calcolo automatico totali + validazione valori
-import { useState, useEffect, useCallback } from 'react';
+// Burraco Score - SDK 52 - auto-verifica + dettatura vocale Android
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, ActivityIndicator, Image, SafeAreaView,
+  StyleSheet, Alert, ActivityIndicator, Image, SafeAreaView, Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { StatusBar } from 'expo-status-bar';
 
 const CHIAVE_STORAGE = 'anthropic_api_key';
+const TABELLE_STORAGE = 'tabelle_vp';
+const TABELLA_ATTIVA_STORAGE = 'tabella_attiva';
 const SMAZZATE = 4;
 
-// ── Tabella Victory Points ────────────────────────────────────────────────────
-const TABELLA_VP = [
-  { min: 0,    max: 100,  vp: [10, 10] },
-  { min: 105,  max: 300,  vp: [11, 9]  },
-  { min: 305,  max: 500,  vp: [12, 8]  },
-  { min: 505,  max: 700,  vp: [13, 7]  },
-  { min: 705,  max: 900,  vp: [14, 6]  },
-  { min: 905,  max: 1100, vp: [15, 5]  },
-  { min: 1105, max: 1300, vp: [16, 4]  },
-  { min: 1305, max: 1500, vp: [17, 3]  },
-  { min: 1505, max: 1700, vp: [18, 2]  },
-  { min: 1705, max: 2000, vp: [19, 1]  },
-  { min: 2005, max: Infinity, vp: [20, 0] },
-];
+// ── Tabella VP default ────────────────────────────────────────────────────────
+const TABELLA_DEFAULT = {
+  id: 'default',
+  nome: 'Standard APS',
+  righe: [
+    { min: 0,    max: 100,   vpV: 10, vpP: 10 },
+    { min: 105,  max: 300,   vpV: 11, vpP: 9  },
+    { min: 305,  max: 500,   vpV: 12, vpP: 8  },
+    { min: 505,  max: 700,   vpV: 13, vpP: 7  },
+    { min: 705,  max: 900,   vpV: 14, vpP: 6  },
+    { min: 905,  max: 1100,  vpV: 15, vpP: 5  },
+    { min: 1105, max: 1300,  vpV: 16, vpP: 4  },
+    { min: 1305, max: 1500,  vpV: 17, vpP: 3  },
+    { min: 1505, max: 1700,  vpV: 18, vpP: 2  },
+    { min: 1705, max: 2000,  vpV: 19, vpP: 1  },
+    { min: 2005, max: 99999, vpV: 20, vpP: 0  },
+  ],
+};
 
-function calcolaVP(diffCalcolata) {
+function calcolaVPdaTabella(tabella, diffCalcolata) {
   const d = Math.abs(diffCalcolata);
-  const riga = TABELLA_VP.find(r => d >= r.min && d <= r.max);
+  const riga = tabella.righe.find(r => d >= r.min && d <= r.max);
   if (!riga) return null;
   return diffCalcolata >= 0
-    ? { vpA: riga.vp[0], vpB: riga.vp[1] }
-    : { vpA: riga.vp[1], vpB: riga.vp[0] };
+    ? { vpA: riga.vpV, vpB: riga.vpP }
+    : { vpA: riga.vpP, vpB: riga.vpV };
 }
 
-// ── Parsing valore dal segnapunti ─────────────────────────────────────────────
-// Gestisce: numeri interi, negativi (- prima o dopo), trattino = 0
+// ── Parsing valore ────────────────────────────────────────────────────────────
 function parseValore(v) {
   if (v === null || v === undefined) return 0;
   const s = String(v).trim();
-  if (s === '' || s === '-' || s === '/' || s === '—' || s === '–') return 0;
-  // Segno meno dopo il numero (es. "100-")
+  if (!s || s === '-' || s === '/' || s === '—' || s === '–') return 0;
   if (/^\d+-$/.test(s)) return -parseInt(s, 10);
-  // Numero normale o negativo
   const n = parseInt(s.replace(/[^0-9\-]/g, ''), 10);
   return isNaN(n) ? 0 : n;
+}
+
+// ── Dettatura vocale Android ──────────────────────────────────────────────────
+// Parole italiane per numeri e segno meno
+const PAROLE_NUMERI = {
+  'zero': '0', 'uno': '1', 'due': '2', 'tre': '3', 'quattro': '4',
+  'cinque': '5', 'sei': '6', 'sette': '7', 'otto': '8', 'nove': '9',
+  'dieci': '10', 'undici': '11', 'dodici': '12', 'tredici': '13',
+  'quattordici': '14', 'quindici': '15', 'venti': '20', 'trenta': '30',
+  'quaranta': '40', 'cinquanta': '50', 'cento': '100', 'duecento': '200',
+  'trecento': '300', 'quattrocento': '400', 'cinquecento': '500',
+  'seicento': '600', 'settecento': '700', 'ottocento': '800', 'novecento': '900',
+  'mille': '1000', 'meno': '-', 'negativo': '-',
+};
+
+function parseTesto(testo) {
+  if (!testo) return null;
+  let s = testo.toLowerCase().trim();
+  // Prova prima se è già un numero
+  const diretto = parseInt(s.replace(/[^0-9\-]/g, ''), 10);
+  if (!isNaN(diretto)) return String(diretto);
+  // Cerca parole chiave
+  for (const [parola, valore] of Object.entries(PAROLE_NUMERI)) {
+    if (s === parola) return valore;
+  }
+  // Estrai solo cifre
+  const cifre = s.replace(/[^0-9\-]/g, '');
+  if (cifre) return cifre;
+  return null;
+}
+
+async function avviaRiconoscimentoVocale(prompt) {
+  try {
+    const result = await IntentLauncher.startActivityAsync(
+      'android.speech.action.RECOGNIZE_SPEECH',
+      {
+        extra: {
+          'android.speech.extra.LANGUAGE_MODEL': 'android.speech.extra.LANGUAGE_MODEL_FREE_FORM',
+          'android.speech.extra.PROMPT': prompt,
+          'android.speech.extra.LANGUAGE': 'it-IT',
+          'android.speech.extra.MAX_RESULTS': 1,
+        },
+      }
+    );
+    if (result.resultCode === -1 && result.data) {
+      // Estrai il testo dal risultato
+      const testo = result.data?.['android.speech.extra.RESULTS']?.[0]
+        ?? result.data?.results?.[0]
+        ?? null;
+      return parseTesto(testo);
+    }
+    return null;
+  } catch (e) {
+    Alert.alert('Voce non disponibile', 'Il riconoscimento vocale non è disponibile su questo dispositivo.');
+    return null;
+  }
 }
 
 // ── Prompt OCR ────────────────────────────────────────────────────────────────
@@ -55,17 +115,15 @@ Il foglio ha due colonne (Coppia A e Coppia B) e 4 smazzate o mani.
 Ogni smazzata ha tre righe: BASE, PUNTI, TOTALE.
 Alla fine ci sono VICTORY POINT per ogni coppia.
 
-REGOLE IMPORTANTI per la lettura:
-- I valori BASE sono sempre multipli di 50 (es: 0, 50, 100, 150, 200, 250, 300...). Se leggi un numero che non e' multiplo di 50, arrotonda al multiplo di 50 piu' vicino.
-- I valori PUNTI sono sempre multipli di 5 (es: 0, 5, 10, 15, 20...). Se leggi un numero che non e' multiplo di 5, arrotonda al multiplo di 5 piu' vicino.
-- Un trattino orizzontale (-), obliquo (/) o qualsiasi segno che non sia un numero deve essere letto come 0.
-- Il segno meno puo' apparire prima O DOPO il numero (es: "-150" oppure "150-"): entrambi indicano un valore negativo.
-- Fai attenzione a non confondere il numero 1 con la lettera I o il numero 7.
-- Fai attenzione a non confondere il numero 0 con la lettera O.
-- I TOTALI sono somme cumulative: TOTALE1 = BASE1+PUNTI1, TOTALE2 = TOTALE1+BASE2+PUNTI2, ecc.
-- NON leggere i totali finali (TOTALE A, TOTALE B) ne' la DIFFERENZA: saranno calcolati automaticamente.
+REGOLE per la lettura:
+- BASE: sempre multipli di 50 (0, 50, 100, 150...). Arrotonda al multiplo di 50 piu' vicino.
+- PUNTI: sempre multipli di 5 (0, 5, 10, 15...). Arrotonda al multiplo di 5 piu' vicino.
+- Trattino (-), obliquo (/) o segno non numerico = 0.
+- Il segno meno puo' essere prima O DOPO il numero.
+- Leggi anche i VICTORY POINT scritti in fondo al foglio.
+- NON leggere il totale finale ne' la differenza: vengono calcolati dall'app.
 
-Restituisci SOLO un oggetto JSON valido, senza markdown, senza testo aggiuntivo:
+Restituisci SOLO un oggetto JSON valido, senza markdown:
 {
   "nomiA": ["nome1", "nome2"],
   "nomiB": ["nome1", "nome2"],
@@ -77,19 +135,9 @@ Restituisci SOLO un oggetto JSON valido, senza markdown, senza testo aggiuntivo:
   ],
   "vpA": 0,
   "vpB": 0
-}
-Nomi non visibili -> "". Solo JSON, nulla altro.`;
+}`;
 
-// ── Calcola totale cumulativo di una colonna ──────────────────────────────────
-function calcolaTotaleColonna(righe) {
-  let tot = 0;
-  righe.forEach(r => {
-    tot += (Number(r.base) || 0) + (Number(r.punti) || 0);
-  });
-  return tot;
-}
-
-// ── Verifica somme mano per mano ──────────────────────────────────────────────
+// ── Verifica somme ────────────────────────────────────────────────────────────
 function verificaColonna(righe, etichetta) {
   const errori = [];
   let totPrec = 0;
@@ -105,17 +153,16 @@ function verificaColonna(righe, etichetta) {
   return errori;
 }
 
-// ── Validazione BASE (multipli di 50) e PUNTI (multipli di 5) ────────────────
 function validaValori(righe, etichetta) {
   const errori = [];
   righe.forEach((r, i) => {
     if (r.base !== '' && r.base !== '0') {
-      const b = Math.abs(Number(r.base));
-      if (b % 50 !== 0) errori.push({ smazzata: i + 1, colonna: etichetta, tipo: 'BASE', valore: r.base });
+      if (Math.abs(Number(r.base)) % 50 !== 0)
+        errori.push({ smazzata: i + 1, colonna: etichetta, tipo: 'BASE', valore: r.base });
     }
     if (r.punti !== '' && r.punti !== '0') {
-      const p = Math.abs(Number(r.punti));
-      if (p % 5 !== 0) errori.push({ smazzata: i + 1, colonna: etichetta, tipo: 'PUNTI', valore: r.punti });
+      if (Math.abs(Number(r.punti)) % 5 !== 0)
+        errori.push({ smazzata: i + 1, colonna: etichetta, tipo: 'PUNTI', valore: r.punti });
     }
   });
   return errori;
@@ -123,12 +170,10 @@ function validaValori(righe, etichetta) {
 
 function testoErrori(n) { return n === 1 ? '1 errore trovato' : `${n} errori trovati`; }
 
-// ── Legge file come base64 ────────────────────────────────────────────────────
 async function uriToBase64(uri) {
   return await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
 }
 
-// ── Chiamata API Anthropic Vision ─────────────────────────────────────────────
 async function estraiDatiDaFoto(uri, apiKey) {
   const base64 = await uriToBase64(uri);
   const risposta = await fetch('https://api.anthropic.com/v1/messages', {
@@ -140,7 +185,7 @@ async function estraiDatiDaFoto(uri, apiKey) {
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Estrai con la massima precisione tutti i punteggi da questo segnapunti di Burraco scritto a mano.' },
+        { type: 'text', text: 'Estrai con la massima precisione tutti i punteggi da questo segnapunti di Burraco.' },
       ]}],
     }),
   });
@@ -150,18 +195,42 @@ async function estraiDatiDaFoto(uri, apiKey) {
   return JSON.parse(testo.replace(/```json|```/g, '').trim());
 }
 
-// ── Campo numerico con validazione colore ─────────────────────────────────────
-function Campo({ value, onChange, errore, warn }) {
+// ── Campo con microfono ───────────────────────────────────────────────────────
+function Campo({ value, onChange, errore, warn, promptVoce }) {
+  const [ascolto, setAscolto] = useState(false);
+
+  const avviaVoce = async () => {
+    setAscolto(true);
+    const risultato = await avviaRiconoscimentoVocale(promptVoce ?? 'Pronuncia il numero');
+    setAscolto(false);
+    if (risultato !== null) onChange(risultato);
+  };
+
   return (
-    <TextInput keyboardType="numbers-and-punctuation" value={value} onChangeText={onChange}
-      style={[s.input, errore && s.inputErr, warn && !errore && s.inputWarn]}
-      placeholder="—" placeholderTextColor="#bbb" selectTextOnFocus />
+    <View style={s.campoWrap}>
+      <TextInput
+        keyboardType="numbers-and-punctuation"
+        value={value}
+        onChangeText={onChange}
+        style={[s.input, errore && s.inputErr, warn && !errore && s.inputWarn]}
+        placeholder="—"
+        placeholderTextColor="#bbb"
+        selectTextOnFocus
+      />
+      <TouchableOpacity onPress={avviaVoce} style={[s.btnMic, ascolto && s.btnMicAscolto]}>
+        <Text style={{ fontSize: 14 }}>{ascolto ? '⏺' : '🎤'}</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
 // ── Blocco singola mano ───────────────────────────────────────────────────────
 function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB, warnA, warnB }) {
-  const righe = [{ k: 'base', label: 'BASE' }, { k: 'punti', label: 'PUNTI' }, { k: 'totale', label: 'TOTALE' }];
+  const righe = [
+    { k: 'base',   label: 'BASE',   prompt: 'Pronuncia il valore base (multiplo di 50)' },
+    { k: 'punti',  label: 'PUNTI',  prompt: 'Pronuncia i punti (multiplo di 5)' },
+    { k: 'totale', label: 'TOTALE', prompt: 'Pronuncia il totale' },
+  ];
   return (
     <View style={s.blocco}>
       <View style={s.bloccoHeader}><Text style={s.manoNum}>MANO {idx + 1}</Text></View>
@@ -170,18 +239,20 @@ function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB,
         <View style={s.col}><View style={[s.tag, { backgroundColor: '#2c5f2e' }]}><Text style={s.tagT}>A</Text></View></View>
         <View style={s.col}><View style={[s.tag, { backgroundColor: '#7a2230' }]}><Text style={s.tagT}>B</Text></View></View>
       </View>
-      {righe.map(({ k, label }) => (
+      {righe.map(({ k, label, prompt }) => (
         <View key={k} style={[s.riga, k === 'totale' && s.rigaTotale]}>
           <Text style={s.rigaLabel}>{label}</Text>
           <View style={s.col}>
             <Campo value={datiA[k]} onChange={v => onChangeA(idx, k, v)}
               errore={k === 'totale' && erroriA.includes(idx)}
-              warn={k !== 'totale' && warnA.some(w => w.smazzata === idx + 1 && w.tipo === label)} />
+              warn={k !== 'totale' && warnA.some(w => w.smazzata === idx + 1 && w.tipo === label)}
+              promptVoce={`Mano ${idx + 1} Coppia A - ${prompt}`} />
           </View>
           <View style={s.col}>
             <Campo value={datiB[k]} onChange={v => onChangeB(idx, k, v)}
               errore={k === 'totale' && erroriB.includes(idx)}
-              warn={k !== 'totale' && warnB.some(w => w.smazzata === idx + 1 && w.tipo === label)} />
+              warn={k !== 'totale' && warnB.some(w => w.smazzata === idx + 1 && w.tipo === label)}
+              promptVoce={`Mano ${idx + 1} Coppia B - ${prompt}`} />
           </View>
         </View>
       ))}
@@ -189,64 +260,47 @@ function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB,
   );
 }
 
-// ── Blocco riepilogo finale ───────────────────────────────────────────────────
-function BloccoRiepilogo({ datiA, datiB, vpA, vpB, onChangeVpA, onChangeVpB, erroriRiepilogo }) {
-  const totA = calcolaTotaleColonna(datiA);
-  const totB = calcolaTotaleColonna(datiB);
+// ── Blocco riepilogo ──────────────────────────────────────────────────────────
+function BloccoRiepilogo({ datiA, datiB, vpA, vpB, onChangeVpA, onChangeVpB, erroriRiepilogo, tabella }) {
+  const totA = Number(datiA[3]?.totale) || 0;
+  const totB = Number(datiB[3]?.totale) || 0;
   const diff = totA - totB;
-  const vpCalcolati = calcolaVP(diff);
-
-  const vincenteA = totA >= totB;
+  const vpCalcolati = tabella ? calcolaVPdaTabella(tabella, diff) : null;
+  const vincenteA = diff >= 0;
 
   return (
     <View style={s.blocco}>
-      <View style={s.bloccoHeader}><Text style={s.manoNum}>RIEPILOGO FINALE</Text></View>
+      <View style={s.bloccoHeader}>
+        <Text style={s.manoNum}>RIEPILOGO · {tabella?.nome ?? '—'}</Text>
+      </View>
       <View style={s.rigaHeader}>
         <View style={s.etSpazio} />
         <View style={s.col}><View style={[s.tag, { backgroundColor: '#2c5f2e' }]}><Text style={s.tagT}>A</Text></View></View>
         <View style={s.col}><View style={[s.tag, { backgroundColor: '#7a2230' }]}><Text style={s.tagT}>B</Text></View></View>
       </View>
-
-      {/* Totali calcolati */}
       <View style={[s.riga, s.rigaTotale]}>
         <Text style={s.rigaLabel}>TOTALE</Text>
-        <View style={s.col}>
-          <Text style={[s.totaleCalc, erroriRiepilogo.totaleA && s.totaleCalcErr]}>{totA}</Text>
-        </View>
-        <View style={s.col}>
-          <Text style={[s.totaleCalc, erroriRiepilogo.totaleB && s.totaleCalcErr]}>{totB}</Text>
-        </View>
+        <View style={s.col}><Text style={s.totaleCalc}>{totA}</Text></View>
+        <View style={s.col}><Text style={s.totaleCalc}>{totB}</Text></View>
       </View>
-
-      {/* Differenza sotto il totale maggiore */}
       <View style={s.riga}>
         <Text style={s.rigaLabel}>DIFF.</Text>
         <View style={s.col}>
-          {vincenteA
-            ? <Text style={[s.diffCalc, { color: '#2c5f2e' }]}>{Math.abs(diff)}</Text>
-            : <Text style={s.diffVuoto}>—</Text>
-          }
+          {vincenteA ? <Text style={[s.diffCalc, { color: '#2c5f2e' }]}>{Math.abs(diff)}</Text> : <Text style={s.diffVuoto}>—</Text>}
         </View>
         <View style={s.col}>
-          {!vincenteA
-            ? <Text style={[s.diffCalc, { color: '#7a2230' }]}>{Math.abs(diff)}</Text>
-            : <Text style={s.diffVuoto}>—</Text>
-          }
+          {!vincenteA ? <Text style={[s.diffCalc, { color: '#7a2230' }]}>{Math.abs(diff)}</Text> : <Text style={s.diffVuoto}>—</Text>}
         </View>
       </View>
-
-      {/* Victory Points scritti */}
       <View style={[s.riga, s.rigaTotale]}>
         <Text style={s.rigaLabel}>V.P. scritti</Text>
         <View style={s.col}>
-          <Campo value={vpA} onChange={onChangeVpA} errore={erroriRiepilogo.vpA} />
+          <Campo value={vpA} onChange={onChangeVpA} errore={erroriRiepilogo.vpA} promptVoce="Victory Point Coppia A" />
         </View>
         <View style={s.col}>
-          <Campo value={vpB} onChange={onChangeVpB} errore={erroriRiepilogo.vpB} />
+          <Campo value={vpB} onChange={onChangeVpB} errore={erroriRiepilogo.vpB} promptVoce="Victory Point Coppia B" />
         </View>
       </View>
-
-      {/* Victory Points calcolati */}
       {vpCalcolati && (
         <View style={[s.riga, { backgroundColor: '#f0f8f0' }]}>
           <Text style={s.rigaLabel}>V.P. calc.</Text>
@@ -258,47 +312,170 @@ function BloccoRiepilogo({ datiA, datiB, vpA, vpB, onChangeVpA, onChangeVpB, err
   );
 }
 
-// ── Schermata Impostazioni ────────────────────────────────────────────────────
+// ── Editor Tabella ────────────────────────────────────────────────────────────
+function EditorTabella({ tabella, onSalva, onAnnulla }) {
+  const [nome, setNome] = useState(tabella?.nome ?? '');
+  const [righe, setRighe] = useState(
+    tabella?.righe.map(r => ({
+      min: String(r.min), max: String(r.max === 99999 ? '' : r.max),
+      vpV: String(r.vpV), vpP: String(r.vpP),
+    })) ?? [{ min: '0', max: '100', vpV: '10', vpP: '10' }]
+  );
+  const aggiornaRiga = (i, campo, val) => setRighe(prev => { const c = [...prev]; c[i] = { ...c[i], [campo]: val }; return c; });
+  const aggiungiRiga = () => setRighe(prev => [...prev, { min: '', max: '', vpV: '', vpP: '' }]);
+  const rimuoviRiga = (i) => setRighe(prev => prev.filter((_, idx) => idx !== i));
+  const salva = () => {
+    if (!nome.trim()) { Alert.alert('Errore', 'Inserisci un nome per la tabella.'); return; }
+    onSalva({
+      id: tabella?.id ?? String(Date.now()),
+      nome: nome.trim(),
+      righe: righe.map(r => ({ min: parseInt(r.min) || 0, max: r.max === '' ? 99999 : parseInt(r.max) || 0, vpV: parseInt(r.vpV) || 0, vpP: parseInt(r.vpP) || 0 })),
+    });
+  };
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        <View style={s.header}><Text style={s.titolo}>BURRACO</Text><Text style={s.sottotitolo}>Editor Tabella VP</Text></View>
+        <View style={s.card}>
+          <Text style={s.inputLabel}>Nome tabella</Text>
+          <TextInput style={s.inputNome} value={nome} onChangeText={setNome} placeholder="Es. Torneo Roma 2026" placeholderTextColor="#9a8a75" />
+        </View>
+        <View style={s.card}>
+          <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+            <Text style={[s.colTh, { flex: 1.2 }]}>Da</Text>
+            <Text style={[s.colTh, { flex: 1.2 }]}>A</Text>
+            <Text style={[s.colTh, { flex: 1 }]}>VP Vin.</Text>
+            <Text style={[s.colTh, { flex: 1 }]}>VP Per.</Text>
+            <View style={{ width: 30 }} />
+          </View>
+          {righe.map((r, i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6, gap: 4 }}>
+              <TextInput style={[s.inputTh, { flex: 1.2 }]} value={r.min} onChangeText={v => aggiornaRiga(i, 'min', v)} keyboardType="number-pad" placeholder="0" placeholderTextColor="#bbb" />
+              <TextInput style={[s.inputTh, { flex: 1.2 }]} value={r.max} onChangeText={v => aggiornaRiga(i, 'max', v)} keyboardType="number-pad" placeholder="∞" placeholderTextColor="#bbb" />
+              <TextInput style={[s.inputTh, { flex: 1 }]} value={r.vpV} onChangeText={v => aggiornaRiga(i, 'vpV', v)} keyboardType="number-pad" placeholder="0" placeholderTextColor="#bbb" />
+              <TextInput style={[s.inputTh, { flex: 1 }]} value={r.vpP} onChangeText={v => aggiornaRiga(i, 'vpP', v)} keyboardType="number-pad" placeholder="0" placeholderTextColor="#bbb" />
+              <TouchableOpacity onPress={() => rimuoviRiga(i)} style={s.btnRimuovi}><Text style={{ color: '#e74c3c', fontWeight: 'bold' }}>✕</Text></TouchableOpacity>
+            </View>
+          ))}
+          <TouchableOpacity style={s.btnAggiungiRiga} onPress={aggiungiRiga}>
+            <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ Aggiungi riga</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={s.pulsanti}>
+          <TouchableOpacity style={s.btnReset} onPress={onAnnulla}><Text style={s.btnResetT}>Annulla</Text></TouchableOpacity>
+          <TouchableOpacity style={s.btnVerifica} onPress={salva}><Text style={s.btnVerificaT}>Salva</Text></TouchableOpacity>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ── Impostazioni ──────────────────────────────────────────────────────────────
 function SchermatImpostazioni({ onTorna }) {
   const [apiKey, setApiKey] = useState('');
   const [salvata, setSalvata] = useState(false);
   const [caricamento, setCaricamento] = useState(true);
-  useEffect(() => { SecureStore.getItemAsync(CHIAVE_STORAGE).then(k => { if (k) { setApiKey(k); setSalvata(true); } setCaricamento(false); }); }, []);
-  const salva = async () => {
+  const [tabelle, setTabelle] = useState([TABELLA_DEFAULT]);
+  const [tabellaAttivaId, setTabellaAttivaId] = useState('default');
+  const [editorTabella, setEditorTabella] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const k = await SecureStore.getItemAsync(CHIAVE_STORAGE);
+      if (k) { setApiKey(k); setSalvata(true); }
+      const t = await SecureStore.getItemAsync(TABELLE_STORAGE);
+      if (t) setTabelle(JSON.parse(t));
+      const ta = await SecureStore.getItemAsync(TABELLA_ATTIVA_STORAGE);
+      if (ta) setTabellaAttivaId(ta);
+      setCaricamento(false);
+    })();
+  }, []);
+
+  const salvaApiKey = async () => {
     const pulita = apiKey.trim();
-    if (!pulita.startsWith('sk-ant-')) { Alert.alert('Chiave non valida', 'La API key deve iniziare con "sk-ant-". Controllala su console.anthropic.com'); return; }
-    await SecureStore.setItemAsync(CHIAVE_STORAGE, pulita); setSalvata(true); Alert.alert('Salvata', 'API key salvata correttamente.');
+    if (!pulita.startsWith('sk-ant-')) { Alert.alert('Chiave non valida', 'La API key deve iniziare con "sk-ant-".'); return; }
+    await SecureStore.setItemAsync(CHIAVE_STORAGE, pulita); setSalvata(true); Alert.alert('Salvata', 'API key salvata.');
   };
-  const elimina = async () => { Alert.alert('Elimina chiave', 'Sei sicuro?', [{ text: 'Annulla', style: 'cancel' }, { text: 'Elimina', style: 'destructive', onPress: async () => { await SecureStore.deleteItemAsync(CHIAVE_STORAGE); setApiKey(''); setSalvata(false); } }]); };
+  const eliminaApiKey = async () => Alert.alert('Elimina chiave', 'Sei sicuro?', [{ text: 'Annulla', style: 'cancel' }, { text: 'Elimina', style: 'destructive', onPress: async () => { await SecureStore.deleteItemAsync(CHIAVE_STORAGE); setApiKey(''); setSalvata(false); } }]);
+
+  const salvaTabelle = async (nuove) => { setTabelle(nuove); await SecureStore.setItemAsync(TABELLE_STORAGE, JSON.stringify(nuove)); };
+  const salvaTabellaAttiva = async (id) => { setTabellaAttivaId(id); await SecureStore.setItemAsync(TABELLA_ATTIVA_STORAGE, id); };
+  const onSalvaTabella = async (tab) => {
+    const nuove = tabelle.find(t => t.id === tab.id) ? tabelle.map(t => t.id === tab.id ? tab : t) : [...tabelle, tab];
+    await salvaTabelle(nuove); setEditorTabella(null);
+  };
+  const eliminaTabella = (id) => {
+    if (id === 'default') { Alert.alert('Errore', 'La tabella Standard non può essere eliminata.'); return; }
+    Alert.alert('Elimina tabella', 'Sei sicuro?', [{ text: 'Annulla', style: 'cancel' }, { text: 'Elimina', style: 'destructive', onPress: async () => { const nuove = tabelle.filter(t => t.id !== id); await salvaTabelle(nuove); if (tabellaAttivaId === id) await salvaTabellaAttiva('default'); } }]);
+  };
+
   if (caricamento) return <View style={s.centrato}><ActivityIndicator color="#d4af37" size="large" /></View>;
+  if (editorTabella !== null) return <EditorTabella tabella={editorTabella === 'nuova' ? null : editorTabella} onSalva={onSalvaTabella} onAnnulla={() => setEditorTabella(null)} />;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={s.header}><Text style={s.titolo}>BURRACO</Text><Text style={s.sottotitolo}>Impostazioni</Text></View>
         <View style={s.card}>
           <Text style={s.cardTitolo}>API Key Anthropic</Text>
-          <Text style={s.testo}>L'app usa l'AI di Anthropic per leggere il segnapunti.{'\n\n'}Ogni utente usa la propria chiave personale. Il costo per analisi e' inferiore a 1 centesimo. Anthropic offre credito gratuito iniziale.</Text>
-          <Text style={s.passiTitolo}>Come ottenere la tua API key:</Text>
-          {['Vai su console.anthropic.com','Registrati o accedi','Menu a sinistra -> "API Keys"','Clicca "Create Key"','Copia la chiave e incollala qui sotto'].map((p, i) => (
-            <Text key={i} style={s.passo}><Text style={s.passoNum}>{i + 1}. </Text>{p}</Text>
-          ))}
-        </View>
-        <View style={s.card}>
+          <Text style={s.testo}>Necessaria per l'analisi OCR delle foto. Costo per analisi {'<'} 1 centesimo. Ottieni la tua chiave su console.anthropic.com</Text>
           <Text style={s.inputLabel}>La tua API Key</Text>
           <TextInput style={s.inputNome} value={apiKey} onChangeText={v => { setApiKey(v); setSalvata(false); }} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
           {salvata && <Text style={s.salvataMsg}>✓ Chiave salvata e attiva</Text>}
+          <View style={[s.pulsanti, { paddingHorizontal: 0, paddingTop: 10 }]}>
+            <TouchableOpacity style={s.btnVerifica} onPress={salvaApiKey}><Text style={s.btnVerificaT}>Salva</Text></TouchableOpacity>
+            {salvata && <TouchableOpacity style={[s.btnReset, { borderColor: '#e74c3c' }]} onPress={eliminaApiKey}><Text style={[s.btnResetT, { color: '#e74c3c' }]}>Elimina</Text></TouchableOpacity>}
+          </View>
         </View>
-        <View style={s.pulsanti}>
-          <TouchableOpacity style={s.btnVerifica} onPress={salva}><Text style={s.btnVerificaT}>Salva</Text></TouchableOpacity>
-          {salvata && <TouchableOpacity style={[s.btnReset, { borderColor: '#e74c3c' }]} onPress={elimina}><Text style={[s.btnResetT, { color: '#e74c3c' }]}>Elimina</Text></TouchableOpacity>}
+        <View style={s.card}>
+          <Text style={s.cardTitolo}>Tabelle Victory Points</Text>
+          <Text style={s.testo}>Seleziona la tabella da usare per il calcolo dei VP.</Text>
+          {tabelle.map(t => (
+            <View key={t.id} style={s.rigaTabella}>
+              <TouchableOpacity style={s.radioBtnWrap} onPress={() => salvaTabellaAttiva(t.id)}>
+                <View style={[s.radioBtn, tabellaAttivaId === t.id && s.radioBtnAttivo]} />
+                <Text style={[s.nomeTabellaT, tabellaAttivaId === t.id && { color: '#1a1a2e', fontWeight: 'bold' }]}>{t.nome}</Text>
+              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity onPress={() => setEditorTabella(t)} style={s.btnTabAzione}><Text style={{ color: '#7a6a55', fontSize: 12 }}>✏ Modifica</Text></TouchableOpacity>
+                {t.id !== 'default' && <TouchableOpacity onPress={() => eliminaTabella(t.id)} style={s.btnTabAzione}><Text style={{ color: '#e74c3c', fontSize: 12 }}>✕</Text></TouchableOpacity>}
+              </View>
+            </View>
+          ))}
+          {(() => {
+            const tab = tabelle.find(t => t.id === tabellaAttivaId);
+            if (!tab) return null;
+            return (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[s.inputLabel, { marginBottom: 6 }]}>Anteprima: {tab.nome}</Text>
+                <View style={{ flexDirection: 'row', marginBottom: 4 }}>
+                  <Text style={[s.colTh, { flex: 2 }]}>Differenza</Text>
+                  <Text style={[s.colTh, { flex: 1 }]}>VP Vin.</Text>
+                  <Text style={[s.colTh, { flex: 1 }]}>VP Per.</Text>
+                </View>
+                {tab.righe.map((r, i) => (
+                  <View key={i} style={{ flexDirection: 'row', paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: '#f0e8d8' }}>
+                    <Text style={[s.cellTh, { flex: 2 }]}>{r.min} – {r.max === 99999 ? '∞' : r.max}</Text>
+                    <Text style={[s.cellTh, { flex: 1, color: '#2c5f2e', fontWeight: 'bold' }]}>{r.vpV}</Text>
+                    <Text style={[s.cellTh, { flex: 1, color: '#7a2230', fontWeight: 'bold' }]}>{r.vpP}</Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })()}
+          <TouchableOpacity style={[s.btnVerifica, { marginTop: 14 }]} onPress={() => setEditorTabella('nuova')}>
+            <Text style={s.btnVerificaT}>+ Nuova tabella</Text>
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity style={{ padding: 16, alignItems: 'center' }} onPress={onTorna}><Text style={{ color: '#7a6a55', fontSize: 14 }}>← Torna all'app</Text></TouchableOpacity>
+        <TouchableOpacity style={{ padding: 16, alignItems: 'center' }} onPress={onTorna}>
+          <Text style={{ color: '#7a6a55', fontSize: 14 }}>← Torna all'app</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ── Schermata Home ────────────────────────────────────────────────────────────
+// ── Home ──────────────────────────────────────────────────────────────────────
 function SchermatHome({ onImpostazioni }) {
   const vuoto = () => Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
   const [nomiA, setNomiA] = useState(['', '']);
@@ -312,79 +489,68 @@ function SchermatHome({ onImpostazioni }) {
   const [stato, setStato] = useState('idle');
   const [erroreMsg, setErroreMsg] = useState('');
   const [apiKey, setApiKey] = useState(null);
+  const [tabella, setTabella] = useState(TABELLA_DEFAULT);
 
+  // Carica settings
   useEffect(() => {
-    const carica = () => SecureStore.getItemAsync(CHIAVE_STORAGE).then(k => setApiKey(k ?? null));
+    const carica = async () => {
+      const k = await SecureStore.getItemAsync(CHIAVE_STORAGE);
+      setApiKey(k ?? null);
+      const t = await SecureStore.getItemAsync(TABELLE_STORAGE);
+      const tabelle = t ? JSON.parse(t) : [TABELLA_DEFAULT];
+      const ta = await SecureStore.getItemAsync(TABELLA_ATTIVA_STORAGE) ?? 'default';
+      setTabella(tabelle.find(x => x.id === ta) ?? TABELLA_DEFAULT);
+    };
     carica();
-    const t = setInterval(carica, 1500);
-    return () => clearInterval(t);
+    const timer = setInterval(carica, 2000);
+    return () => clearInterval(timer);
   }, []);
 
-  const calcolaRisultato = (a, b, vA, vB) => {
+  // ── AUTO-VERIFICA: si ricalcola ad ogni cambio ────────────────────────────
+  const calcolaRisultato = useCallback((a, b, vA, vB, tab) => {
     const errori = [];
     const indiciErrA = [];
     const indiciErrB = [];
-
-    // Verifica somme mano per mano
     verificaColonna(a, 'A').forEach(e => { errori.push(e); indiciErrA.push(e.smazzata - 1); });
     verificaColonna(b, 'B').forEach(e => { errori.push(e); indiciErrB.push(e.smazzata - 1); });
-
-    // Verifica validità BASE e PUNTI
-    const warnA = validaValori(a, 'A');
-    const warnB = validaValori(b, 'B');
-    warnA.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia A: ${w.tipo} = ${w.valore} non è un multiplo valido` }));
-    warnB.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia B: ${w.tipo} = ${w.valore} non è un multiplo valido` }));
-
-    // Totali calcolati
-    const totA = calcolaTotaleColonna(a);
-    const totB = calcolaTotaleColonna(b);
-
-    // Verifica che il TOTALE della mano 4 corrisponda al totale calcolato
-    const erroriRiepilogo = { totaleA: false, totaleB: false, vpA: false, vpB: false };
-    const tot4A = Number(a[3]?.totale);
-    const tot4B = Number(b[3]?.totale);
-    if (a[3]?.totale !== '' && tot4A !== totA) {
-      errori.push({ desc: `Totale mano 4 Coppia A: scritto ${tot4A}, calcolato ${totA}` });
-      erroriRiepilogo.totaleA = true;
-    }
-    if (b[3]?.totale !== '' && tot4B !== totB) {
-      errori.push({ desc: `Totale mano 4 Coppia B: scritto ${tot4B}, calcolato ${totB}` });
-      erroriRiepilogo.totaleB = true;
-    }
-
-    // Verifica VP
+    const wA = validaValori(a, 'A');
+    const wB = validaValori(b, 'B');
+    wA.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia A: ${w.tipo} "${w.valore}" non è multiplo valido` }));
+    wB.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia B: ${w.tipo} "${w.valore}" non è multiplo valido` }));
+    const totA = Number(a[3]?.totale) || 0;
+    const totB = Number(b[3]?.totale) || 0;
     const diff = totA - totB;
-    const vpCalcolati = calcolaVP(diff);
-    if (vpCalcolati && vA !== '' && Number(vA) !== vpCalcolati.vpA) {
-      errori.push({ desc: `VP Coppia A: scritto ${vA}, atteso ${vpCalcolati.vpA}` });
-      erroriRiepilogo.vpA = true;
-    }
-    if (vpCalcolati && vB !== '' && Number(vB) !== vpCalcolati.vpB) {
-      errori.push({ desc: `VP Coppia B: scritto ${vB}, atteso ${vpCalcolati.vpB}` });
-      erroriRiepilogo.vpB = true;
-    }
+    const vpCalcolati = tab ? calcolaVPdaTabella(tab, diff) : null;
+    const erroriRiepilogo = { vpA: false, vpB: false };
+    if (vpCalcolati && vA !== '' && Number(vA) !== vpCalcolati.vpA) { errori.push({ desc: `VP Coppia A: scritto ${vA}, atteso ${vpCalcolati.vpA}` }); erroriRiepilogo.vpA = true; }
+    if (vpCalcolati && vB !== '' && Number(vB) !== vpCalcolati.vpB) { errori.push({ desc: `VP Coppia B: scritto ${vB}, atteso ${vpCalcolati.vpB}` }); erroriRiepilogo.vpB = true; }
+    return { ok: errori.length === 0, errori, indiciErrA, indiciErrB, erroriRiepilogo, warnA: wA, warnB: wB };
+  }, []);
 
-    return { ok: errori.length === 0, errori, indiciErrA, indiciErrB, erroriRiepilogo, warnA, warnB };
-  };
+  // useEffect per auto-verifica in tempo reale
+  useEffect(() => {
+    const hasDati = datiA.some(r => r.base !== '' || r.punti !== '' || r.totale !== '') ||
+                    datiB.some(r => r.base !== '' || r.punti !== '' || r.totale !== '');
+    if (hasDati) {
+      setRisultato(calcolaRisultato(datiA, datiB, vpA, vpB, tabella));
+    } else {
+      setRisultato(null);
+    }
+  }, [datiA, datiB, vpA, vpB, tabella]);
 
   const aggiorna = useCallback((setter, idx, campo, valore) => {
     setter(prev => { const c = prev.map(r => ({ ...r })); c[idx][campo] = valore; return c; });
-    setRisultato(null);
   }, []);
 
   const controllaApiKey = () => {
-    if (!apiKey) {
-      Alert.alert('API Key mancante', 'Configura la tua API key nelle impostazioni.',
-        [{ text: 'Impostazioni', onPress: onImpostazioni }, { text: 'Annulla' }]);
-      return false;
-    }
+    if (!apiKey) { Alert.alert('API Key mancante', 'Configurala nelle impostazioni.', [{ text: 'Impostazioni', onPress: onImpostazioni }, { text: 'Annulla' }]); return false; }
     return true;
   };
 
   const scattaFoto = async () => {
     if (!controllaApiKey()) return;
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera nelle impostazioni del telefono."); return; }
+    if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera."); return; }
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.85, base64: false });
     if (!res.canceled && res.assets?.[0]?.uri) elaboraFoto(res.assets[0].uri);
   };
@@ -392,65 +558,41 @@ function SchermatHome({ onImpostazioni }) {
   const caricaDaLibreria = async () => {
     if (!controllaApiKey()) return;
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla galleria nelle impostazioni del telefono."); return; }
+    if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla galleria."); return; }
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85, base64: false });
     if (!res.canceled && res.assets?.[0]?.uri) elaboraFoto(res.assets[0].uri);
   };
 
   const elaboraFoto = async (uri) => {
-    setAnteprima(uri);
-    setStato('analisi');
-    setRisultato(null);
-    setErroreMsg('');
+    setAnteprima(uri); setStato('analisi'); setRisultato(null); setErroreMsg('');
     try {
       const dati = await estraiDatiDaFoto(uri, apiKey);
-      const toStr = v => {
-        const n = parseValore(v);
-        return n === 0 ? '0' : String(n);
-      };
-      const nuoviA = dati.smazzate.map(sm => ({
-        base: toStr(sm.a.base), punti: toStr(sm.a.punti), totale: toStr(sm.a.totale)
-      }));
-      const nuoviB = dati.smazzate.map(sm => ({
-        base: toStr(sm.b.base), punti: toStr(sm.b.punti), totale: toStr(sm.b.totale)
-      }));
-      const nVpA = toStr(dati.vpA);
-      const nVpB = toStr(dati.vpB);
+      const toStr = v => String(parseValore(v));
+      const nuoviA = dati.smazzate.map(sm => ({ base: toStr(sm.a.base), punti: toStr(sm.a.punti), totale: toStr(sm.a.totale) }));
+      const nuoviB = dati.smazzate.map(sm => ({ base: toStr(sm.b.base), punti: toStr(sm.b.punti), totale: toStr(sm.b.totale) }));
+      const nVpA = toStr(dati.vpA); const nVpB = toStr(dati.vpB);
       setNomiA(dati.nomiA?.length ? dati.nomiA : ['', '']);
       setNomiB(dati.nomiB?.length ? dati.nomiB : ['', '']);
-      setDatiA(nuoviA); setDatiB(nuoviB);
-      setVpA(nVpA); setVpB(nVpB);
-      setRisultato(calcolaRisultato(nuoviA, nuoviB, nVpA, nVpB));
+      setDatiA(nuoviA); setDatiB(nuoviB); setVpA(nVpA); setVpB(nVpB);
       setStato('fatto');
-    } catch (e) {
-      setStato('errore');
-      setErroreMsg(e.message);
-    }
+    } catch (e) { setStato('errore'); setErroreMsg(e.message); }
   };
 
-  const verifica = () => setRisultato(calcolaRisultato(datiA, datiB, vpA, vpB));
-
-  const reset = () => {
-    setDatiA(vuoto()); setDatiB(vuoto());
-    setNomiA(['', '']); setNomiB(['', '']);
-    setVpA(''); setVpB('');
-    setRisultato(null); setAnteprima(null);
-    setStato('idle'); setErroreMsg('');
-  };
-
+  const reset = () => { setDatiA(vuoto()); setDatiB(vuoto()); setNomiA(['', '']); setNomiB(['', '']); setVpA(''); setVpB(''); setRisultato(null); setAnteprima(null); setStato('idle'); setErroreMsg(''); };
   const ris = risultato;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
       <StatusBar style="light" />
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-
         <View style={s.header}>
           <Text style={s.titolo}>BURRACO</Text>
           <Text style={s.sottotitolo}>Verifica Punteggi</Text>
           <TouchableOpacity style={s.btnImp} onPress={onImpostazioni}><Text style={s.btnImpT}>⚙ Impostazioni</Text></TouchableOpacity>
         </View>
-
+        <View style={s.bannerTabella}>
+          <Text style={s.bannerTabellaT}>📊 Tabella VP: <Text style={{ fontWeight: 'bold' }}>{tabella.nome}</Text></Text>
+        </View>
         <View style={{ padding: 14 }}>
           {stato === 'analisi' ? (
             <View style={s.loading}><ActivityIndicator color="#d4af37" size="large" /><Text style={s.loadingT}>Analisi in corso…</Text></View>
@@ -464,33 +606,20 @@ function SchermatHome({ onImpostazioni }) {
             </View>
           ) : (
             <View style={s.btnRiga}>
-              <TouchableOpacity style={s.btnScan} onPress={scattaFoto}>
-                <Text style={s.btnScanIcona}>📷</Text><Text style={s.btnScanT}>Fotocamera</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.btnScan} onPress={caricaDaLibreria}>
-                <Text style={s.btnScanIcona}>🖼</Text><Text style={s.btnScanT}>Libreria</Text>
-              </TouchableOpacity>
+              <TouchableOpacity style={s.btnScan} onPress={scattaFoto}><Text style={s.btnScanIcona}>📷</Text><Text style={s.btnScanT}>Fotocamera</Text></TouchableOpacity>
+              <TouchableOpacity style={s.btnScan} onPress={caricaDaLibreria}><Text style={s.btnScanIcona}>🖼</Text><Text style={s.btnScanT}>Libreria</Text></TouchableOpacity>
             </View>
           )}
           {stato === 'errore' && <View style={s.erroreApi}><Text style={s.erroreApiT}>⚠ {erroreMsg}</Text></View>}
         </View>
-
         <View style={s.nomiSection}>
-          {[
-            { label: 'COPPIA A', nomi: nomiA, setNomi: setNomiA, colore: '#2c5f2e' },
-            { label: 'COPPIA B', nomi: nomiB, setNomi: setNomiB, colore: '#7a2230' },
-          ].map(({ label, nomi, setNomi, colore }) => (
+          {[{ label: 'COPPIA A', nomi: nomiA, setNomi: setNomiA, colore: '#2c5f2e' }, { label: 'COPPIA B', nomi: nomiB, setNomi: setNomiB, colore: '#7a2230' }].map(({ label, nomi, setNomi, colore }) => (
             <View key={label} style={s.nomiCol}>
               <Text style={[s.nomiHead, { color: colore }]}>{label}</Text>
-              {[0, 1].map(i => (
-                <TextInput key={i} style={s.inputNome} value={nomi[i]}
-                  onChangeText={v => { const n = [...nomi]; n[i] = v; setNomi(n); }}
-                  placeholder={`Giocatore ${i + 1}`} placeholderTextColor="#b0a080" />
-              ))}
+              {[0, 1].map(i => <TextInput key={i} style={s.inputNome} value={nomi[i]} onChangeText={v => { const n = [...nomi]; n[i] = v; setNomi(n); }} placeholder={`Giocatore ${i + 1}`} placeholderTextColor="#b0a080" />)}
             </View>
           ))}
         </View>
-
         <View style={s.griglia}>
           {Array.from({ length: SMAZZATE }, (_, i) => (
             <BloccoMano key={i} idx={i} datiA={datiA[i]} datiB={datiB[i]}
@@ -499,57 +628,28 @@ function SchermatHome({ onImpostazioni }) {
               erroriA={ris?.indiciErrA ?? []} erroriB={ris?.indiciErrB ?? []}
               warnA={ris?.warnA ?? []} warnB={ris?.warnB ?? []} />
           ))}
-
-          <BloccoRiepilogo
-            datiA={datiA} datiB={datiB} vpA={vpA} vpB={vpB}
-            onChangeVpA={v => { setVpA(v); setRisultato(null); }}
-            onChangeVpB={v => { setVpB(v); setRisultato(null); }}
-            erroriRiepilogo={ris?.erroriRiepilogo ?? {}}
-          />
+          <BloccoRiepilogo datiA={datiA} datiB={datiB} vpA={vpA} vpB={vpB}
+            onChangeVpA={v => setVpA(v)} onChangeVpB={v => setVpB(v)}
+            erroriRiepilogo={ris?.erroriRiepilogo ?? {}} tabella={tabella} />
         </View>
-
         <View style={s.pulsanti}>
           <TouchableOpacity style={s.btnReset} onPress={reset}><Text style={s.btnResetT}>↺ Reset</Text></TouchableOpacity>
-          <TouchableOpacity style={s.btnVerifica} onPress={verifica}><Text style={s.btnVerificaT}>✓ Verifica</Text></TouchableOpacity>
         </View>
-
         {ris && (
           <View style={[s.risultatoBox, ris.ok ? s.boxOk : s.boxErr]}>
             {ris.ok ? (
-              <View style={s.rigaOk}>
-                <Text style={s.iconaOk}>✓</Text>
-                <View>
-                  <Text style={s.testoOk}>Tutto corretto!</Text>
-                  <Text style={s.subOk}>Somme, differenza e Victory Point verificati.</Text>
-                </View>
-              </View>
+              <View style={s.rigaOk}><Text style={s.iconaOk}>✓</Text><View><Text style={s.testoOk}>Tutto corretto!</Text><Text style={s.subOk}>Somme, differenza e Victory Point verificati.</Text></View></View>
             ) : (
               <View>
-                <View style={s.rigaErrHeader}>
-                  <Text style={s.iconaErr}>✗</Text>
-                  <Text style={s.testoErr}>{testoErrori(ris.errori.length)}</Text>
-                </View>
+                <View style={s.rigaErrHeader}><Text style={s.iconaErr}>✗</Text><Text style={s.testoErr}>{testoErrori(ris.errori.length)}</Text></View>
                 {ris.errori.map((e, i) => (
                   <View key={i} style={s.rigaErrore}>
-                    {e.colonna ? (
-                      <View style={[s.tag, { backgroundColor: e.colonna === 'A' ? '#2c5f2e' : '#7a2230', width: 20, height: 20 }]}>
-                        <Text style={[s.tagT, { fontSize: 11 }]}>{e.colonna}</Text>
-                      </View>
-                    ) : (
-                      <View style={[s.tag, { backgroundColor: '#b8860b', width: 20, height: 20 }]}>
-                        <Text style={[s.tagT, { fontSize: 9 }]}>!</Text>
-                      </View>
-                    )}
+                    {e.colonna ? <View style={[s.tag, { backgroundColor: e.colonna === 'A' ? '#2c5f2e' : '#7a2230', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 11 }]}>{e.colonna}</Text></View>
+                      : <View style={[s.tag, { backgroundColor: '#b8860b', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 9 }]}>!</Text></View>}
                     <View style={{ flex: 1 }}>
-                      {e.desc ? (
-                        <Text style={s.errDet}>{e.desc}</Text>
-                      ) : (
-                        <>
-                          <Text style={s.errDet}>
-                            Mano {e.smazzata} — scritto <Text style={{ fontWeight: 'bold' }}>{e.scritto}</Text>, atteso <Text style={{ fontWeight: 'bold' }}>{e.atteso}</Text>
-                          </Text>
-                          <Text style={s.errDiff}>Differenza: {e.atteso - e.scritto > 0 ? '+' : ''}{e.atteso - e.scritto} punti</Text>
-                        </>
+                      {e.desc ? <Text style={s.errDet}>{e.desc}</Text> : (
+                        <><Text style={s.errDet}>Mano {e.smazzata} — scritto <Text style={{ fontWeight: 'bold' }}>{e.scritto}</Text>, atteso <Text style={{ fontWeight: 'bold' }}>{e.atteso}</Text></Text>
+                        <Text style={s.errDiff}>Differenza: {e.atteso - e.scritto > 0 ? '+' : ''}{e.atteso - e.scritto} punti</Text></>
                       )}
                     </View>
                   </View>
@@ -558,20 +658,17 @@ function SchermatHome({ onImpostazioni }) {
             )}
           </View>
         )}
-
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [schermata, setSchermata] = useState('home');
   if (schermata === 'impostazioni') return <SchermatImpostazioni onTorna={() => setSchermata('home')} />;
   return <SchermatHome onImpostazioni={() => setSchermata('impostazioni')} />;
 }
 
-// ── Stili ─────────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   centrato: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5efe6' },
   header: { backgroundColor: '#1a1a2e', paddingTop: 20, paddingBottom: 14, alignItems: 'center' },
@@ -579,6 +676,8 @@ const s = StyleSheet.create({
   sottotitolo: { fontSize: 11, color: '#a0a0c0', letterSpacing: 2, textTransform: 'uppercase', marginTop: 4 },
   btnImp: { marginTop: 10, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: '#d4af3766', borderRadius: 20 },
   btnImpT: { color: '#d4af37', fontSize: 12 },
+  bannerTabella: { backgroundColor: '#16213e', borderBottomWidth: 1, borderBottomColor: '#d4af3744', padding: 8, paddingHorizontal: 16 },
+  bannerTabellaT: { color: '#a0a0c0', fontSize: 12 },
   btnRiga: { flexDirection: 'row', gap: 10 },
   btnScan: { flex: 1, backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#d4af37', borderStyle: 'dashed', borderRadius: 12, padding: 18, alignItems: 'center', gap: 4 },
   btnScanIcona: { fontSize: 28 },
@@ -606,11 +705,13 @@ const s = StyleSheet.create({
   riga: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: '#f0e8d8', backgroundColor: '#fff' },
   rigaTotale: { backgroundColor: '#faf6f0', borderTopWidth: 2, borderTopColor: '#e8dcc8' },
   rigaLabel: { width: 54, fontSize: 9, letterSpacing: 1, color: '#9a8a75', fontWeight: 'bold', textTransform: 'uppercase' },
-  input: { borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 4, fontSize: 16, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8', width: '92%' },
+  campoWrap: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'center', gap: 4 },
+  input: { borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 4, fontSize: 15, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8', flex: 1 },
   inputErr: { borderColor: '#e74c3c', backgroundColor: '#fff0ee' },
   inputWarn: { borderColor: '#e67e22', backgroundColor: '#fff8ee' },
+  btnMic: { width: 30, height: 34, borderRadius: 6, backgroundColor: '#f0e8d8', alignItems: 'center', justifyContent: 'center' },
+  btnMicAscolto: { backgroundColor: '#e74c3c' },
   totaleCalc: { fontSize: 18, fontWeight: 'bold', color: '#2a1e12', textAlign: 'center' },
-  totaleCalcErr: { color: '#e74c3c' },
   diffCalc: { fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   diffVuoto: { fontSize: 16, color: '#ccc', textAlign: 'center' },
   vpCalc: { fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
@@ -634,10 +735,18 @@ const s = StyleSheet.create({
   errDiff: { fontSize: 11, color: '#c0392b', marginTop: 2 },
   card: { margin: 16, backgroundColor: '#fff', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#ddd0b8' },
   cardTitolo: { fontSize: 13, fontWeight: 'bold', color: '#3a2e22', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 },
-  testo: { fontSize: 14, color: '#5a4a3a', lineHeight: 21 },
-  passiTitolo: { fontSize: 13, fontWeight: 'bold', color: '#3a2e22', marginTop: 14, marginBottom: 8 },
-  passo: { fontSize: 13, color: '#5a4a3a', marginBottom: 5, lineHeight: 19 },
-  passoNum: { color: '#d4af37', fontWeight: 'bold' },
+  testo: { fontSize: 14, color: '#5a4a3a', lineHeight: 21, marginBottom: 10 },
   inputLabel: { fontSize: 11, letterSpacing: 1.5, color: '#7a6a55', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: 8 },
   salvataMsg: { marginTop: 8, fontSize: 13, color: '#2c5f2e', fontWeight: 'bold' },
+  rigaTabella: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f0e8d8' },
+  radioBtnWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  radioBtn: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#c8b89a', backgroundColor: '#fff' },
+  radioBtnAttivo: { borderColor: '#1a1a2e', backgroundColor: '#1a1a2e' },
+  nomeTabellaT: { fontSize: 14, color: '#7a6a55' },
+  btnTabAzione: { paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: '#e8dcc8', borderRadius: 6 },
+  colTh: { fontSize: 10, fontWeight: 'bold', color: '#9a8a75', textTransform: 'uppercase', textAlign: 'center' },
+  cellTh: { fontSize: 13, color: '#3a2e22', textAlign: 'center' },
+  inputTh: { borderWidth: 1, borderColor: '#c8b89a', borderRadius: 5, padding: 6, fontSize: 13, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8' },
+  btnRimuovi: { width: 30, alignItems: 'center', justifyContent: 'center' },
+  btnAggiungiRiga: { marginTop: 10, padding: 10, borderWidth: 1, borderColor: '#d4af37', borderRadius: 8, alignItems: 'center', borderStyle: 'dashed' },
 });
