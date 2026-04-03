@@ -1,13 +1,16 @@
 {
   "expo": {
-    "name": "Burraco Score",
+    "name": "Controlla Punti",
     "slug": "burraco-app",
     "version": "1.0.0",
     "sdkVersion": "52.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
     "splash": {
-      "backgroundColor": "#1a1a2e"
+      "backgroundColor": "#1a9e9e",
+      "image": "./assets/icon.png",
+      "resizeMode": "contain"
     },
     "ios": {
       "supportsTablet": false,
@@ -17,16 +20,11 @@
       }
     },
     "android": {
-      "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE"
-      ],
-      "package": "com.robertomastro.burracoapp"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "e8d40e18-d0e6-4989-b85c-f09963cd0b9f"
-      }
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#1a9e9e"
+      },
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"]
     }
   }
 }
