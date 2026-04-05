@@ -373,36 +373,38 @@ function testoErrori(n) { return n === 1 ? '1 errore trovato' : `${n} errori tro
 const SYSTEM_PROMPT = `Sei un esperto letturista di segnapunti di Burraco scritti a mano.
 
 STRUTTURA DEL FOGLIO:
-- Due colonne: Coppia A (sinistra) e Coppia B (destra)
-- 4 smazzate/mani, ciascuna con tre righe: BASE, PUNTI, TOTALE
-- In fondo: VICTORY POINT per A e per B
+Il foglio ha DUE COLONNE affiancate: Coppia A (sinistra) e Coppia B (destra).
+Ogni colonna ha 4 blocchi (mani/smazzate), ciascuno con:
+  - BASE (riga superiore del blocco)
+  - PUNTI (riga centrale del blocco)
+  - TOTALE (riga inferiore del blocco, in grassetto o sottolineata)
+In fondo al foglio ci sono i VICTORY POINT: un numero per A e uno per B.
 
-VINCOLI MATEMATICI DA SFRUTTARE:
-- BASE: sempre multiplo di 50 (0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500...)
-- PUNTI: sempre multiplo di 5 (0, 5, 10, 15, 20, 25, 30...)
-- TOTALE mano 1 = BASE1 + PUNTI1
-- TOTALE mano 2 = TOTALE1 + BASE2 + PUNTI2
-- TOTALE mano 3 = TOTALE2 + BASE3 + PUNTI3
-- TOTALE mano 4 = TOTALE3 + BASE4 + PUNTI4
-- Usa questi vincoli per CORREGGERE eventuali errori di lettura
+REGOLE DI LETTURA (non modificare i valori letti):
+- BASE: multiplo di 50. Se leggi un numero non multiplo di 50, scegli il multiplo di 50 piu' vicino.
+- PUNTI: multiplo di 5. Se leggi un numero non multiplo di 5, scegli il multiplo di 5 piu' vicino.
+- TOTALE: leggi esattamente il numero scritto, senza modificarlo ne' calcolarlo.
+- Trattino (-), slash (/), segno isolato = 0.
+- Numero con segno meno prima o dopo = negativo (es: "150-" oppure "-150" = -150).
+- Confusioni frequenti: 1 vs 7, 0 vs 6, 3 vs 8, 4 vs 9. Usa il contesto visivo.
 
-REGOLE DI LETTURA:
-- Trattino (-), slash (/), segno singolo isolato = 0
-- Segno meno PRIMA o DOPO il numero = valore negativo (es: "150-" = -150)
-- Se un numero non rispetta il vincolo multiplo, arrotonda al multiplo piu' vicino
-- Cifra "1" e lettera "I" sono spesso confuse: usa il contesto per distinguerle
-- Cifra "0" e lettera "O" sono spesso confuse: usa il contesto
-- Cifra "7" con tratto orizzontale puo' sembrare "1": usa il contesto
+PROCEDURA OBBLIGATORIA - segui questi passi nell'ordine:
 
-PROCEDURA:
-1. Leggi la colonna A dall'alto verso il basso: BASE1, PUNTI1, TOTALE1, BASE2, PUNTI2, TOTALE2, ecc.
-2. Verifica che i TOTALI siano matematicamente coerenti con BASE e PUNTI
-3. Se c'e' incoerenza, determina quale valore e' piu' plausibile e correggilo
-4. Ripeti per la colonna B
-5. Leggi i VP in fondo
+PASSO 1 - Leggi la colonna A dall'alto al basso e scrivi i valori grezzi:
+"Colonna A: BASE1=?, PUNTI1=?, TOTALE1=?, BASE2=?, PUNTI2=?, TOTALE2=?, BASE3=?, PUNTI3=?, TOTALE3=?, BASE4=?, PUNTI4=?, TOTALE4=?"
 
-Restituisci SOLO JSON valido senza markdown, senza testo aggiuntivo:
-{"nomiA":["nome1","nome2"],"nomiB":["nome1","nome2"],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
+PASSO 2 - Leggi la colonna B dall'alto al basso e scrivi i valori grezzi:
+"Colonna B: BASE1=?, PUNTI1=?, TOTALE1=?, BASE2=?, ..."
+
+PASSO 3 - Leggi i Victory Point:
+"VPA=?, VPB=?"
+
+PASSO 4 - Leggi i nomi delle coppie se visibili.
+
+PASSO 5 - Produci il JSON finale con i valori letti (non calcolati):
+{"nomiA":["nome1","nome2"],"nomiB":["nome1","nome2"],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}
+
+Il testo dei passi 1-4 puo' precedere il JSON. Il JSON deve essere l'ultimo elemento della risposta.`;
 
 async function estraiDatiDaFoto(uri, apiKey) {
   const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
@@ -410,7 +412,7 @@ async function estraiDatiDaFoto(uri, apiKey) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514', max_tokens: 1200, system: SYSTEM_PROMPT,
+      model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
         { type: 'text', text: 'Leggi questo segnapunti di Burraco. Applica tutti i vincoli matematici per verificare e correggere i valori. Restituisci solo il JSON.' },
@@ -420,7 +422,10 @@ async function estraiDatiDaFoto(uri, apiKey) {
   if (!risposta.ok) { const err = await risposta.json().catch(() => ({})); throw new Error(err?.error?.message ?? `Errore API: ${risposta.status}`); }
   const dati = await risposta.json();
   const testo = dati.content.find(b => b.type === 'text')?.text ?? '';
-  return JSON.parse(testo.replace(/```json|```/g, '').trim());
+  // Con chain-of-thought il JSON è preceduto da testo libero — estrae l'ultimo blocco JSON
+  const match = testo.match(/\{[\s\S]*\}(?=[^}]*$)/);
+  if (!match) throw new Error('Nessun JSON trovato nella risposta OCR');
+  return JSON.parse(match[0]);
 }
 
 // ── Visualizzatore foto fullscreen con zoom ───────────────────────────────────
