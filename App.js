@@ -1,9 +1,9 @@
-// Burraco Score - SDK 52
-import { useState, useEffect, useCallback } from 'react';
+// Burraco Score - UI minimalista con swipe foto ↔ griglia
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Alert, ActivityIndicator, Image, SafeAreaView,
-  Modal, Dimensions,
+  Dimensions, Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
@@ -11,15 +11,16 @@ import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import { StatusBar } from 'expo-status-bar';
 
+const { width: SW, height: SH } = Dimensions.get('window');
+
 const CHIAVE_STORAGE = 'anthropic_api_key';
 const TABELLE_STORAGE = 'tabelle_vp';
 const TABELLA_ATTIVA_STORAGE = 'tabella_attiva';
 const SMAZZATE = 4;
 
-// ── Tabella VP default ────────────────────────────────────────────────────────
+// ── Tabelle predefinite ───────────────────────────────────────────────────────
 const TABELLA_DEFAULT = {
-  id: 'default',
-  nome: 'Standard APS',
+  id: 'default', nome: 'Standard APS',
   righe: [
     { min: 0,    max: 100,   vpV: 10, vpP: 10 },
     { min: 105,  max: 300,   vpV: 11, vpP: 9  },
@@ -34,10 +35,8 @@ const TABELLA_DEFAULT = {
     { min: 2005, max: 99999, vpV: 20, vpP: 0  },
   ],
 };
-
 const TABELLA_A_SQUADRE = {
-  id: 'a_squadre',
-  nome: 'A squadre',
+  id: 'a_squadre', nome: 'A squadre',
   righe: [
     { min: 0,    max: 150,   vpV: 10, vpP: 10 },
     { min: 155,  max: 350,   vpV: 11, vpP: 9  },
@@ -52,16 +51,13 @@ const TABELLA_A_SQUADRE = {
     { min: 2505, max: 99999, vpV: 20, vpP: 0  },
   ],
 };
-
 const TABELLE_DEFAULT = [TABELLA_DEFAULT, TABELLA_A_SQUADRE];
 
-function calcolaVPdaTabella(tabella, diffCalcolata) {
-  const d = Math.abs(diffCalcolata);
-  const riga = tabella.righe.find(r => d >= r.min && d <= r.max);
-  if (!riga) return null;
-  return diffCalcolata >= 0
-    ? { vpA: riga.vpV, vpB: riga.vpP }
-    : { vpA: riga.vpP, vpB: riga.vpV };
+function calcolaVPdaTabella(tabella, diff) {
+  const d = Math.abs(diff);
+  const r = tabella.righe.find(r => d >= r.min && d <= r.max);
+  if (!r) return null;
+  return diff >= 0 ? { vpA: r.vpV, vpB: r.vpP } : { vpA: r.vpP, vpB: r.vpV };
 }
 
 function parseValore(v) {
@@ -73,275 +69,52 @@ function parseValore(v) {
   return isNaN(n) ? 0 : n;
 }
 
-// ── Campo numerico con toggle segno +/- ──────────────────────────────────────
-function Campo({ value, onChange, errore, warn }) {
-  const toggleSegno = () => {
-    const n = parseInt(value, 10);
-    if (!isNaN(n) && n !== 0) onChange(String(-n));
-  };
+// ── Prompt OCR con chain-of-thought ──────────────────────────────────────────
+const SYSTEM_PROMPT = `Sei un esperto letturista di segnapunti di Burraco scritti a mano.
 
-  return (
-    <View style={s.campoWrap}>
-      <TouchableOpacity onPress={toggleSegno} style={s.btnSegno}>
-        <Text style={s.btnSegnoT}>{value && value.startsWith('-') ? '−' : '+'}</Text>
-      </TouchableOpacity>
-      <TextInput
-        keyboardType="number-pad"
-        value={value.replace('-', '')}
-        onChangeText={v => {
-          const cifre = v.replace(/[^0-9]/g, '');
-          const negativo = value.startsWith('-');
-          onChange(cifre === '' ? '' : (negativo ? '-' + cifre : cifre));
-        }}
-        style={[s.input, errore && s.inputErr, warn && !errore && s.inputWarn]}
-        placeholder="—"
-        placeholderTextColor="#bbb"
-        selectTextOnFocus
-      />
-    </View>
-  );
-}
+STRUTTURA DEL FOGLIO:
+Il foglio ha DUE COLONNE affiancate: Coppia A (sinistra) e Coppia B (destra).
+Ogni colonna ha 4 blocchi (mani/smazzate), ciascuno con:
+  - BASE (riga superiore del blocco)
+  - PUNTI (riga centrale del blocco)
+  - TOTALE (riga inferiore del blocco, in grassetto o sottolineata)
+In fondo al foglio ci sono i VICTORY POINT: un numero per A e uno per B.
 
-// ── Blocco singola mano ───────────────────────────────────────────────────────
-function BloccoMano({ idx, datiA, datiB, onChangeA, onChangeB, erroriA, erroriB, warnA, warnB }) {
-  const righe = [
-    { k: 'base',   label: 'BASE'   },
-    { k: 'punti',  label: 'PUNTI'  },
-    { k: 'totale', label: 'TOTALE' },
-  ];
-  return (
-    <View style={s.blocco}>
-      <View style={s.bloccoHeader}><Text style={s.manoNum}>MANO {idx + 1}</Text></View>
-      <View style={s.rigaHeader}>
-        <View style={s.etSpazio} />
-        <View style={s.col}><View style={[s.tag, { backgroundColor: '#2c5f2e' }]}><Text style={s.tagT}>A</Text></View></View>
-        <View style={s.col}><View style={[s.tag, { backgroundColor: '#7a2230' }]}><Text style={s.tagT}>B</Text></View></View>
-      </View>
-      {righe.map(({ k, label }) => (
-        <View key={k} style={[s.riga, k === 'totale' && s.rigaTotale]}>
-          <Text style={s.rigaLabel}>{label}</Text>
-          <View style={s.col}>
-            <Campo value={datiA[k]} onChange={v => onChangeA(idx, k, v)}
-              errore={k === 'totale' && erroriA.includes(idx)}
-              warn={k !== 'totale' && warnA.some(w => w.smazzata === idx + 1 && w.tipo === label)} />
-          </View>
-          <View style={s.col}>
-            <Campo value={datiB[k]} onChange={v => onChangeB(idx, k, v)}
-              errore={k === 'totale' && erroriB.includes(idx)}
-              warn={k !== 'totale' && warnB.some(w => w.smazzata === idx + 1 && w.tipo === label)} />
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
+REGOLE DI LETTURA:
+- BASE: multiplo di 50. Se leggi un numero non multiplo di 50, scegli il multiplo di 50 piu' vicino.
+- PUNTI: multiplo di 5. Se leggi un numero non multiplo di 5, scegli il multiplo di 5 piu' vicino.
+- TOTALE: leggi esattamente il numero scritto, senza modificarlo ne' calcolarlo.
+- Trattino (-), slash (/), segno isolato = 0.
+- Numero con segno meno prima o dopo = negativo (es: "150-" = -150).
+- Confusioni frequenti: 1 vs 7, 0 vs 6, 3 vs 8, 4 vs 9. Usa il contesto visivo.
 
-// ── Blocco riepilogo ──────────────────────────────────────────────────────────
-function BloccoRiepilogo({ datiA, datiB, vpA, vpB, onChangeVpA, onChangeVpB, erroriRiepilogo, tabella }) {
-  const totA = Number(datiA[3]?.totale) || 0;
-  const totB = Number(datiB[3]?.totale) || 0;
-  const diff = totA - totB;
-  const vpCalcolati = tabella ? calcolaVPdaTabella(tabella, diff) : null;
-  const vincenteA = diff >= 0;
-  return (
-    <View style={s.blocco}>
-      <View style={s.bloccoHeader}>
-        <Text style={s.manoNum}>RIEPILOGO · {tabella?.nome ?? '—'}</Text>
-      </View>
-      <View style={s.rigaHeader}>
-        <View style={s.etSpazio} />
-        <View style={s.col}><View style={[s.tag, { backgroundColor: '#2c5f2e' }]}><Text style={s.tagT}>A</Text></View></View>
-        <View style={s.col}><View style={[s.tag, { backgroundColor: '#7a2230' }]}><Text style={s.tagT}>B</Text></View></View>
-      </View>
-      <View style={[s.riga, s.rigaTotale]}>
-        <Text style={s.rigaLabel}>TOTALE</Text>
-        <View style={s.col}><Text style={s.totaleCalc}>{totA}</Text></View>
-        <View style={s.col}><Text style={s.totaleCalc}>{totB}</Text></View>
-      </View>
-      <View style={s.riga}>
-        <Text style={s.rigaLabel}>DIFF.</Text>
-        <View style={s.col}>{vincenteA ? <Text style={[s.diffCalc, { color: '#2c5f2e' }]}>{Math.abs(diff)}</Text> : <Text style={s.diffVuoto}>—</Text>}</View>
-        <View style={s.col}>{!vincenteA ? <Text style={[s.diffCalc, { color: '#7a2230' }]}>{Math.abs(diff)}</Text> : <Text style={s.diffVuoto}>—</Text>}</View>
-      </View>
-      <View style={[s.riga, s.rigaTotale]}>
-        <Text style={s.rigaLabel}>V.P. scritti</Text>
-        <View style={s.col}><Campo value={vpA} onChange={onChangeVpA} errore={erroriRiepilogo.vpA} /></View>
-        <View style={s.col}><Campo value={vpB} onChange={onChangeVpB} errore={erroriRiepilogo.vpB} /></View>
-      </View>
-      {vpCalcolati && (
-        <View style={[s.riga, { backgroundColor: '#f0f8f0' }]}>
-          <Text style={s.rigaLabel}>V.P. calc.</Text>
-          <View style={s.col}><Text style={[s.vpCalc, { color: '#2c5f2e' }]}>{vpCalcolati.vpA}</Text></View>
-          <View style={s.col}><Text style={[s.vpCalc, { color: '#7a2230' }]}>{vpCalcolati.vpB}</Text></View>
-        </View>
-      )}
-    </View>
-  );
-}
+PROCEDURA - segui questi passi:
+PASSO 1 - Colonna A: scrivi BASE1, PUNTI1, TOTALE1, BASE2, PUNTI2, TOTALE2, BASE3, PUNTI3, TOTALE3, BASE4, PUNTI4, TOTALE4
+PASSO 2 - Colonna B: stessi valori
+PASSO 3 - VPA e VPB
+PASSO 4 - Nomi coppie
+PASSO 5 - JSON finale (deve essere l'ultimo elemento):
+{"nomiA":["nome1","nome2"],"nomiB":["nome1","nome2"],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
 
-// ── Editor Tabella ────────────────────────────────────────────────────────────
-function EditorTabella({ tabella, onSalva, onAnnulla }) {
-  const [nome, setNome] = useState(tabella?.nome ?? '');
-  const [righe, setRighe] = useState(
-    tabella?.righe.map(r => ({
-      min: String(r.min), max: r.max === 99999 ? '' : String(r.max),
-      vpV: String(r.vpV), vpP: String(r.vpP),
-    })) ?? [{ min: '0', max: '100', vpV: '10', vpP: '10' }]
-  );
-  const aggiornaRiga = (i, campo, val) => setRighe(prev => { const c = [...prev]; c[i] = { ...c[i], [campo]: val }; return c; });
-  const aggiungiRiga = () => setRighe(prev => [...prev, { min: '', max: '', vpV: '', vpP: '' }]);
-  const rimuoviRiga = (i) => setRighe(prev => prev.filter((_, idx) => idx !== i));
-  const salva = () => {
-    if (!nome.trim()) { Alert.alert('Errore', 'Inserisci un nome per la tabella.'); return; }
-    onSalva({
-      id: tabella?.id ?? String(Date.now()), nome: nome.trim(),
-      righe: righe.map(r => ({ min: parseInt(r.min) || 0, max: r.max === '' ? 99999 : parseInt(r.max) || 0, vpV: parseInt(r.vpV) || 0, vpP: parseInt(r.vpP) || 0 })),
-    });
-  };
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
-        <View style={s.header}><Text style={s.titolo}>BURRACO</Text><Text style={s.sottotitolo}>Editor Tabella VP</Text></View>
-        <View style={s.card}>
-          <Text style={s.inputLabel}>Nome tabella</Text>
-          <TextInput style={s.inputNome} value={nome} onChangeText={setNome} placeholder="Es. Torneo Roma 2026" placeholderTextColor="#9a8a75" />
-        </View>
-        <View style={s.card}>
-          <Text style={s.cardTitolo}>Fasce punteggio</Text>
-          <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-            <Text style={[s.colTh, { flex: 1.2 }]}>Da</Text>
-            <Text style={[s.colTh, { flex: 1.2 }]}>A</Text>
-            <Text style={[s.colTh, { flex: 1 }]}>VP Vin.</Text>
-            <Text style={[s.colTh, { flex: 1 }]}>VP Per.</Text>
-            <View style={{ width: 30 }} />
-          </View>
-          {righe.map((r, i) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6, gap: 4 }}>
-              <TextInput style={[s.inputTh, { flex: 1.2 }]} value={r.min} onChangeText={v => aggiornaRiga(i, 'min', v)} keyboardType="number-pad" placeholder="0" placeholderTextColor="#bbb" />
-              <TextInput style={[s.inputTh, { flex: 1.2 }]} value={r.max} onChangeText={v => aggiornaRiga(i, 'max', v)} keyboardType="number-pad" placeholder="∞" placeholderTextColor="#bbb" />
-              <TextInput style={[s.inputTh, { flex: 1 }]} value={r.vpV} onChangeText={v => aggiornaRiga(i, 'vpV', v)} keyboardType="number-pad" placeholder="0" placeholderTextColor="#bbb" />
-              <TextInput style={[s.inputTh, { flex: 1 }]} value={r.vpP} onChangeText={v => aggiornaRiga(i, 'vpP', v)} keyboardType="number-pad" placeholder="0" placeholderTextColor="#bbb" />
-              <TouchableOpacity onPress={() => rimuoviRiga(i)} style={s.btnRimuovi}><Text style={{ color: '#e74c3c', fontWeight: 'bold' }}>✕</Text></TouchableOpacity>
-            </View>
-          ))}
-          <TouchableOpacity style={s.btnAggiungiRiga} onPress={aggiungiRiga}>
-            <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ Aggiungi fascia</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={s.pulsanti}>
-          <TouchableOpacity style={s.btnReset} onPress={onAnnulla}><Text style={s.btnResetT}>Annulla</Text></TouchableOpacity>
-          <TouchableOpacity style={s.btnVerifica} onPress={salva}><Text style={s.btnVerificaT}>Salva tabella</Text></TouchableOpacity>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-// ── Impostazioni ──────────────────────────────────────────────────────────────
-function SchermatImpostazioni({ onTorna }) {
-  const [apiKey, setApiKey] = useState('');
-  const [salvata, setSalvata] = useState(false);
-  const [caricamento, setCaricamento] = useState(true);
-  const [tabelle, setTabelle] = useState(TABELLE_DEFAULT);
-  const [tabellaAttivaId, setTabellaAttivaId] = useState('default');
-  const [editorTabella, setEditorTabella] = useState(null);
-
-  useEffect(() => {
-    (async () => {
-      const k = await SecureStore.getItemAsync(CHIAVE_STORAGE);
-      if (k) { setApiKey(k); setSalvata(true); }
-      const t = await SecureStore.getItemAsync(TABELLE_STORAGE);
-      if (t) { try { setTabelle(JSON.parse(t)); } catch (_) {} } else { setTabelle(TABELLE_DEFAULT); }
-      const ta = await SecureStore.getItemAsync(TABELLA_ATTIVA_STORAGE);
-      if (ta) setTabellaAttivaId(ta);
-      setCaricamento(false);
-    })();
-  }, []);
-
-  const salvaApiKey = async () => {
-    const pulita = apiKey.trim();
-    if (!pulita.startsWith('sk-ant-')) { Alert.alert('Chiave non valida', 'La API key deve iniziare con "sk-ant-".'); return; }
-    await SecureStore.setItemAsync(CHIAVE_STORAGE, pulita); setSalvata(true); Alert.alert('Salvata', 'API key salvata.');
-  };
-  const eliminaApiKey = async () => Alert.alert('Elimina chiave', 'Sei sicuro?', [
-    { text: 'Annulla', style: 'cancel' },
-    { text: 'Elimina', style: 'destructive', onPress: async () => { await SecureStore.deleteItemAsync(CHIAVE_STORAGE); setApiKey(''); setSalvata(false); } },
-  ]);
-  const salvaTabelle = async (nuove) => { setTabelle(nuove); await SecureStore.setItemAsync(TABELLE_STORAGE, JSON.stringify(nuove)); };
-  const salvaTabellaAttiva = async (id) => { setTabellaAttivaId(id); await SecureStore.setItemAsync(TABELLA_ATTIVA_STORAGE, id); };
-  const onSalvaTabella = async (tab) => {
-    const nuove = tabelle.find(t => t.id === tab.id) ? tabelle.map(t => t.id === tab.id ? tab : t) : [...tabelle, tab];
-    await salvaTabelle(nuove); setEditorTabella(null);
-  };
-  const eliminaTabella = (id) => {
-    if (id === 'default' || id === 'a_squadre') { Alert.alert('Errore', 'Le tabelle predefinite non possono essere eliminate.'); return; }
-    Alert.alert('Elimina tabella', 'Sei sicuro?', [
-      { text: 'Annulla', style: 'cancel' },
-      { text: 'Elimina', style: 'destructive', onPress: async () => { const nuove = tabelle.filter(t => t.id !== id); await salvaTabelle(nuove); if (tabellaAttivaId === id) await salvaTabellaAttiva('default'); } },
-    ]);
-  };
-
-  if (caricamento) return <View style={s.centrato}><ActivityIndicator color="#d4af37" size="large" /></View>;
-  if (editorTabella !== null) return <EditorTabella tabella={editorTabella === 'nuova' ? null : editorTabella} onSalva={onSalvaTabella} onAnnulla={() => setEditorTabella(null)} />;
-
-  const tabellaAttiva = tabelle.find(t => t.id === tabellaAttivaId) ?? TABELLA_DEFAULT;
-
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
-        <View style={s.header}><Text style={s.titolo}>BURRACO</Text><Text style={s.sottotitolo}>Impostazioni</Text></View>
-        <View style={s.card}>
-          <Text style={s.cardTitolo}>API Key Anthropic</Text>
-          <Text style={s.testo}>Necessaria per l'analisi OCR delle foto. Costo {'<'} 1 centesimo per analisi. Ottieni la chiave su console.anthropic.com</Text>
-          <Text style={s.inputLabel}>La tua API Key</Text>
-          <TextInput style={s.inputNome} value={apiKey} onChangeText={v => { setApiKey(v); setSalvata(false); }}
-            placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
-          {salvata && <Text style={s.salvataMsg}>✓ Chiave salvata e attiva</Text>}
-          <View style={[s.pulsanti, { paddingHorizontal: 0, paddingTop: 10 }]}>
-            <TouchableOpacity style={s.btnVerifica} onPress={salvaApiKey}><Text style={s.btnVerificaT}>Salva chiave</Text></TouchableOpacity>
-            {salvata && <TouchableOpacity style={[s.btnReset, { borderColor: '#e74c3c' }]} onPress={eliminaApiKey}><Text style={[s.btnResetT, { color: '#e74c3c' }]}>Elimina</Text></TouchableOpacity>}
-          </View>
-        </View>
-        <View style={s.card}>
-          <Text style={s.cardTitolo}>Tabelle Victory Points</Text>
-          <Text style={s.testo}>Seleziona la tabella da usare. Puoi modificarla o aggiungerne di nuove.</Text>
-          {tabelle.map(t => (
-            <View key={t.id} style={s.rigaTabella}>
-              <TouchableOpacity style={s.radioBtnWrap} onPress={() => salvaTabellaAttiva(t.id)}>
-                <View style={[s.radioBtn, tabellaAttivaId === t.id && s.radioBtnAttivo]} />
-                <Text style={[s.nomeTabellaT, tabellaAttivaId === t.id && { color: '#1a1a2e', fontWeight: 'bold' }]}>{t.nome}</Text>
-              </TouchableOpacity>
-              <View style={{ flexDirection: 'row', gap: 6 }}>
-                <TouchableOpacity onPress={() => setEditorTabella(t)} style={s.btnTabAzione}><Text style={{ color: '#7a6a55', fontSize: 12 }}>✏ Modifica</Text></TouchableOpacity>
-                {t.id !== 'default' && t.id !== 'a_squadre' && <TouchableOpacity onPress={() => eliminaTabella(t.id)} style={s.btnTabAzione}><Text style={{ color: '#e74c3c', fontSize: 12 }}>✕</Text></TouchableOpacity>}
-              </View>
-            </View>
-          ))}
-          <View style={{ marginTop: 14 }}>
-            <Text style={[s.inputLabel, { marginBottom: 8 }]}>Fasce: {tabellaAttiva.nome}</Text>
-            <View style={{ flexDirection: 'row', marginBottom: 4, paddingHorizontal: 4 }}>
-              <Text style={[s.colTh, { flex: 2 }]}>Differenza</Text>
-              <Text style={[s.colTh, { flex: 1 }]}>VP Vin.</Text>
-              <Text style={[s.colTh, { flex: 1 }]}>VP Per.</Text>
-            </View>
-            {tabellaAttiva.righe.map((r, i) => (
-              <View key={i} style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: '#f0e8d8', backgroundColor: i % 2 === 0 ? '#fff' : '#fdfaf5' }}>
-                <Text style={[s.cellTh, { flex: 2 }]}>{r.min} – {r.max === 99999 ? '2005+' : r.max}</Text>
-                <Text style={[s.cellTh, { flex: 1, color: '#2c5f2e', fontWeight: 'bold' }]}>{r.vpV}</Text>
-                <Text style={[s.cellTh, { flex: 1, color: '#7a2230', fontWeight: 'bold' }]}>{r.vpP}</Text>
-              </View>
-            ))}
-          </View>
-          <TouchableOpacity style={[s.btnVerifica, { marginTop: 14 }]} onPress={() => setEditorTabella('nuova')}>
-            <Text style={s.btnVerificaT}>+ Nuova tabella</Text>
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={{ padding: 16, alignItems: 'center' }} onPress={onTorna}>
-          <Text style={{ color: '#7a6a55', fontSize: 14 }}>← Torna all'app</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
-  );
+async function estraiDatiDaFoto(uri, apiKey) {
+  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+  const risposta = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+        { type: 'text', text: 'Leggi questo segnapunti di Burraco seguendo la procedura. Restituisci il JSON finale.' },
+      ]}],
+    }),
+  });
+  if (!risposta.ok) { const err = await risposta.json().catch(() => ({})); throw new Error(err?.error?.message ?? `Errore API: ${risposta.status}`); }
+  const dati = await risposta.json();
+  const testo = dati.content.find(b => b.type === 'text')?.text ?? '';
+  const match = testo.match(/\{[\s\S]*\}(?=[^}]*$)/);
+  if (!match) throw new Error('Nessun JSON trovato nella risposta OCR');
+  return JSON.parse(match[0]);
 }
 
 // ── Logica verifica ───────────────────────────────────────────────────────────
@@ -368,114 +141,289 @@ function validaValori(righe, etichetta) {
   return errori;
 }
 
-function testoErrori(n) { return n === 1 ? '1 errore trovato' : `${n} errori trovati`; }
-
-const SYSTEM_PROMPT = `Sei un esperto letturista di segnapunti di Burraco scritti a mano.
-
-STRUTTURA DEL FOGLIO:
-Il foglio ha DUE COLONNE affiancate: Coppia A (sinistra) e Coppia B (destra).
-Ogni colonna ha 4 blocchi (mani/smazzate), ciascuno con:
-  - BASE (riga superiore del blocco)
-  - PUNTI (riga centrale del blocco)
-  - TOTALE (riga inferiore del blocco, in grassetto o sottolineata)
-In fondo al foglio ci sono i VICTORY POINT: un numero per A e uno per B.
-
-REGOLE DI LETTURA (non modificare i valori letti):
-- BASE: multiplo di 50. Se leggi un numero non multiplo di 50, scegli il multiplo di 50 piu' vicino.
-- PUNTI: multiplo di 5. Se leggi un numero non multiplo di 5, scegli il multiplo di 5 piu' vicino.
-- TOTALE: leggi esattamente il numero scritto, senza modificarlo ne' calcolarlo.
-- Trattino (-), slash (/), segno isolato = 0.
-- Numero con segno meno prima o dopo = negativo (es: "150-" oppure "-150" = -150).
-- Confusioni frequenti: 1 vs 7, 0 vs 6, 3 vs 8, 4 vs 9. Usa il contesto visivo.
-
-PROCEDURA OBBLIGATORIA - segui questi passi nell'ordine:
-
-PASSO 1 - Leggi la colonna A dall'alto al basso e scrivi i valori grezzi:
-"Colonna A: BASE1=?, PUNTI1=?, TOTALE1=?, BASE2=?, PUNTI2=?, TOTALE2=?, BASE3=?, PUNTI3=?, TOTALE3=?, BASE4=?, PUNTI4=?, TOTALE4=?"
-
-PASSO 2 - Leggi la colonna B dall'alto al basso e scrivi i valori grezzi:
-"Colonna B: BASE1=?, PUNTI1=?, TOTALE1=?, BASE2=?, ..."
-
-PASSO 3 - Leggi i Victory Point:
-"VPA=?, VPB=?"
-
-PASSO 4 - Leggi i nomi delle coppie se visibili.
-
-PASSO 5 - Produci il JSON finale con i valori letti (non calcolati):
-{"nomiA":["nome1","nome2"],"nomiB":["nome1","nome2"],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}
-
-Il testo dei passi 1-4 puo' precedere il JSON. Il JSON deve essere l'ultimo elemento della risposta.`;
-
-async function estraiDatiDaFoto(uri, apiKey) {
-  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-  const risposta = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Leggi questo segnapunti di Burraco. Applica tutti i vincoli matematici per verificare e correggere i valori. Restituisci solo il JSON.' },
-      ]}],
-    }),
-  });
-  if (!risposta.ok) { const err = await risposta.json().catch(() => ({})); throw new Error(err?.error?.message ?? `Errore API: ${risposta.status}`); }
-  const dati = await risposta.json();
-  const testo = dati.content.find(b => b.type === 'text')?.text ?? '';
-  // Con chain-of-thought il JSON è preceduto da testo libero — estrae l'ultimo blocco JSON
-  const match = testo.match(/\{[\s\S]*\}(?=[^}]*$)/);
-  if (!match) throw new Error('Nessun JSON trovato nella risposta OCR');
-  return JSON.parse(match[0]);
-}
-
-// ── Visualizzatore foto fullscreen con zoom ───────────────────────────────────
-function FotoViewer({ uri, onClose }) {
-  const { width, height } = Dimensions.get('window');
+// ── Campo compatto con +/- ────────────────────────────────────────────────────
+function C({ value, onChange, errore, warn, bold }) {
+  const toggleSegno = () => {
+    const n = parseInt(value, 10);
+    if (!isNaN(n) && n !== 0) onChange(String(-n));
+  };
   return (
-    <Modal visible={!!uri} transparent={false} animationType="fade" statusBarTranslucent>
-      <View style={{ flex: 1, backgroundColor: '#000' }}>
-        {/* Pulsante chiudi */}
-        <TouchableOpacity onPress={onClose} style={fvs.btnChiudi}>
-          <Text style={fvs.btnChiudiT}>✕</Text>
-        </TouchableOpacity>
-        <Text style={fvs.hint}>Pizzica per zoomare · Scorri per esplorare</Text>
-        {/* ScrollView con zoom nativo */}
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
-          maximumZoomScale={5}
-          minimumZoomScale={1}
-          centerContent
-          showsHorizontalScrollIndicator={false}
-          showsVerticalScrollIndicator={false}
-          scrollEventThrottle={16}
-        >
-          <Image
-            source={{ uri }}
-            style={{ width, height: height - 100 }}
-            resizeMode="contain"
-          />
-        </ScrollView>
-      </View>
-    </Modal>
+    <View style={g.cellWrap}>
+      <TouchableOpacity onPress={toggleSegno} style={g.segnoBtn}>
+        <Text style={g.segnoT}>{value?.startsWith('-') ? '−' : '+'}</Text>
+      </TouchableOpacity>
+      <TextInput
+        keyboardType="number-pad"
+        value={value?.replace('-', '') ?? ''}
+        onChangeText={v => {
+          const cifre = v.replace(/[^0-9]/g, '');
+          const neg = value?.startsWith('-');
+          onChange(cifre === '' ? '' : (neg ? '-' + cifre : cifre));
+        }}
+        style={[g.cellInput, errore && g.cellErr, warn && !errore && g.cellWarn, bold && g.cellBold]}
+        placeholder="—"
+        placeholderTextColor="#bbb"
+        selectTextOnFocus
+      />
+    </View>
   );
 }
 
-const fvs = StyleSheet.create({
-  btnChiudi: {
-    position: 'absolute', top: 48, right: 16, zIndex: 10,
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  btnChiudiT: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  hint: {
-    color: 'rgba(255,255,255,0.4)', fontSize: 11,
-    textAlign: 'center', marginTop: 52, marginBottom: 4,
-  },
-});
+// ── Griglia punteggi compatta ─────────────────────────────────────────────────
+function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, onChangeVpB, risultato, tabella, nomiA, nomiB }) {
+  const ris = risultato;
+  const totA = Number(datiA[3]?.totale) || 0;
+  const totB = Number(datiB[3]?.totale) || 0;
+  const diff = totA - totB;
+  const vpCalc = tabella ? calcolaVPdaTabella(tabella, diff) : null;
 
-// ── Home ──────────────────────────────────────────────────────────────────────
+  const ROW_H = 32;
+  const HEADER_H = 28;
+
+  const coloreRiga = (i) => i % 2 === 0 ? '#fff' : '#fafaf7';
+
+  const rigaHeader = (
+    <View style={[g.riga, { height: HEADER_H, backgroundColor: '#1a1a2e' }]}>
+      <View style={g.labelCol} />
+      <View style={g.colA}>
+        <Text style={g.headerNome} numberOfLines={1}>{nomiA.filter(Boolean).join('/') || 'A'}</Text>
+      </View>
+      <View style={g.colB}>
+        <Text style={g.headerNome} numberOfLines={1}>{nomiB.filter(Boolean).join('/') || 'B'}</Text>
+      </View>
+    </View>
+  );
+
+  const separatoreMano = (idx) => (
+    <View key={`sep${idx}`} style={g.separatoreMano}>
+      <Text style={g.separatoreT}>M{idx + 1}</Text>
+    </View>
+  );
+
+  const rigaDati = (label, valA, valB, onA, onB, errA, errB, warnA, warnB, isBold, bgColor) => (
+    <View style={[g.riga, { height: ROW_H, backgroundColor: bgColor }]}>
+      <View style={g.labelCol}><Text style={[g.labelT, isBold && { fontWeight: 'bold', color: '#1a1a2e' }]}>{label}</Text></View>
+      <View style={g.colA}><C value={valA} onChange={onA} errore={errA} warn={warnA} bold={isBold} /></View>
+      <View style={g.colB}><C value={valB} onChange={onB} errore={errB} warn={warnB} bold={isBold} /></View>
+    </View>
+  );
+
+  const rigaStatica = (label, valA, valB, colorA, colorB, bgColor) => (
+    <View style={[g.riga, { height: ROW_H, backgroundColor: bgColor }]}>
+      <View style={g.labelCol}><Text style={g.labelT}>{label}</Text></View>
+      <View style={g.colA}><Text style={[g.staticVal, colorA && { color: colorA }]}>{valA}</Text></View>
+      <View style={g.colB}><Text style={[g.staticVal, colorB && { color: colorB }]}>{valB}</Text></View>
+    </View>
+  );
+
+  const mani = [];
+  for (let i = 0; i < SMAZZATE; i++) {
+    const errA = ris?.indiciErrA?.includes(i);
+    const errB = ris?.indiciErrB?.includes(i);
+    const wA = ris?.warnA ?? [];
+    const wB = ris?.warnB ?? [];
+    const bg1 = i % 2 === 0 ? '#fff' : '#fafaf7';
+    const bg2 = i % 2 === 0 ? '#f9f6f0' : '#f4f1ea';
+    mani.push(separatoreMano(i));
+    mani.push(
+      <View key={`m${i}`}>
+        {rigaDati('BASE',
+          datiA[i].base, datiB[i].base,
+          v => onChangeA(i, 'base', v), v => onChangeB(i, 'base', v),
+          false, false,
+          wA.some(w => w.smazzata === i+1 && w.tipo === 'BASE'),
+          wB.some(w => w.smazzata === i+1 && w.tipo === 'BASE'),
+          false, bg1)}
+        {rigaDati('PUNTI',
+          datiA[i].punti, datiB[i].punti,
+          v => onChangeA(i, 'punti', v), v => onChangeB(i, 'punti', v),
+          false, false,
+          wA.some(w => w.smazzata === i+1 && w.tipo === 'PUNTI'),
+          wB.some(w => w.smazzata === i+1 && w.tipo === 'PUNTI'),
+          false, bg1)}
+        {rigaDati('TOT',
+          datiA[i].totale, datiB[i].totale,
+          v => onChangeA(i, 'totale', v), v => onChangeB(i, 'totale', v),
+          errA, errB, false, false, true, bg2)}
+      </View>
+    );
+  }
+
+  // Riepilogo
+  const diffA = diff > 0 ? String(diff) : '';
+  const diffB = diff < 0 ? String(Math.abs(diff)) : '';
+
+  return (
+    <View style={g.griglia}>
+      {rigaHeader}
+      {mani}
+      <View style={g.separatoreMano}><Text style={g.separatoreT}>RIEPILOGO</Text></View>
+      {rigaStatica('TOT.', String(totA), String(totB), '#2c5f2e', '#7a2230', '#fff')}
+      {rigaStatica('DIFF.', diffA, diffB, '#2c5f2e', '#7a2230', '#f9f6f0')}
+      {rigaDati('V.P.', vpA, vpB,
+        onChangeVpA, onChangeVpB,
+        ris?.erroriRiepilogo?.vpA, ris?.erroriRiepilogo?.vpB,
+        false, false, true, '#fff')}
+      {vpCalc && rigaStatica('V.P.✓', String(vpCalc.vpA), String(vpCalc.vpB), '#2c5f2e', '#7a2230', '#eafaf1')}
+    </View>
+  );
+}
+
+// ── Pannello risultato compatto ───────────────────────────────────────────────
+function PannelloRisultato({ risultato }) {
+  if (!risultato) return null;
+  const ris = risultato;
+  if (ris.ok) return (
+    <View style={[r.box, r.boxOk]}>
+      <Text style={r.ok}>✓ Tutto corretto</Text>
+    </View>
+  );
+  return (
+    <View style={[r.box, r.boxErr]}>
+      <Text style={r.errTitolo}>✗ {ris.errori.length === 1 ? '1 errore' : `${ris.errori.length} errori`}</Text>
+      {ris.errori.map((e, i) => (
+        <Text key={i} style={r.errRiga}>
+          {e.colonna ? `[${e.colonna}] M${e.smazzata}: scritto ${e.scritto}, atteso ${e.atteso}` : e.desc}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+// ── Editor Tabella ────────────────────────────────────────────────────────────
+function EditorTabella({ tabella, onSalva, onAnnulla }) {
+  const [nome, setNome] = useState(tabella?.nome ?? '');
+  const [righe, setRighe] = useState(
+    tabella?.righe.map(r => ({ min: String(r.min), max: r.max === 99999 ? '' : String(r.max), vpV: String(r.vpV), vpP: String(r.vpP) }))
+    ?? [{ min: '0', max: '100', vpV: '10', vpP: '10' }]
+  );
+  const upd = (i, k, v) => setRighe(p => { const c = [...p]; c[i] = { ...c[i], [k]: v }; return c; });
+  const salva = () => {
+    if (!nome.trim()) { Alert.alert('Errore', 'Nome mancante.'); return; }
+    onSalva({ id: tabella?.id ?? String(Date.now()), nome: nome.trim(), righe: righe.map(r => ({ min: parseInt(r.min)||0, max: r.max===''?99999:parseInt(r.max)||0, vpV: parseInt(r.vpV)||0, vpP: parseInt(r.vpP)||0 })) });
+  };
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <Text style={imp.titolo}>Editor Tabella VP</Text>
+        <TextInput style={imp.inputNome} value={nome} onChangeText={setNome} placeholder="Nome tabella" placeholderTextColor="#9a8a75" />
+        <View style={{ flexDirection: 'row', marginVertical: 8 }}>
+          {['Da','A','VP Vin.','VP Per.',''].map((h,i) => <Text key={i} style={[imp.th, i<4?{flex:i<2?1.2:1}:{width:28}]}>{h}</Text>)}
+        </View>
+        {righe.map((r, i) => (
+          <View key={i} style={{ flexDirection: 'row', marginBottom: 6, gap: 4, alignItems: 'center' }}>
+            {['min','max','vpV','vpP'].map((k,j) => <TextInput key={k} style={[imp.inputTh, j<2?{flex:1.2}:{flex:1}]} value={r[k]} onChangeText={v => upd(i,k,v)} keyboardType="number-pad" placeholder={k==='max'?'∞':'0'} placeholderTextColor="#bbb" />)}
+            <TouchableOpacity onPress={() => setRighe(p => p.filter((_,idx) => idx!==i))} style={{ width: 28, alignItems: 'center' }}><Text style={{ color: '#e74c3c', fontWeight: 'bold' }}>✕</Text></TouchableOpacity>
+          </View>
+        ))}
+        <TouchableOpacity style={imp.btnAdd} onPress={() => setRighe(p => [...p, { min:'',max:'',vpV:'',vpP:'' }])}><Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ Aggiungi fascia</Text></TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+          <TouchableOpacity style={[imp.btn, { flex: 1, borderWidth: 1.5, borderColor: '#c8b89a' }]} onPress={onAnnulla}><Text style={{ color: '#7a6a55' }}>Annulla</Text></TouchableOpacity>
+          <TouchableOpacity style={[imp.btn, { flex: 2, backgroundColor: '#1a1a2e' }]} onPress={salva}><Text style={{ color: '#d4af37', fontWeight: 'bold' }}>Salva tabella</Text></TouchableOpacity>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ── Impostazioni ──────────────────────────────────────────────────────────────
+function SchermatImpostazioni({ onTorna }) {
+  const [apiKey, setApiKey] = useState('');
+  const [salvata, setSalvata] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [tabelle, setTabelle] = useState(TABELLE_DEFAULT);
+  const [tabellaAttivaId, setTabellaAttivaId] = useState('default');
+  const [editor, setEditor] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const k = await SecureStore.getItemAsync(CHIAVE_STORAGE);
+      if (k) { setApiKey(k); setSalvata(true); }
+      const t = await SecureStore.getItemAsync(TABELLE_STORAGE);
+      if (t) { try { setTabelle(JSON.parse(t)); } catch (_) {} } else { setTabelle(TABELLE_DEFAULT); }
+      const ta = await SecureStore.getItemAsync(TABELLA_ATTIVA_STORAGE);
+      if (ta) setTabellaAttivaId(ta);
+      setLoading(false);
+    })();
+  }, []);
+
+  const salvaApiKey = async () => {
+    const p = apiKey.trim();
+    if (!p.startsWith('sk-ant-')) { Alert.alert('Chiave non valida', 'Deve iniziare con "sk-ant-".'); return; }
+    await SecureStore.setItemAsync(CHIAVE_STORAGE, p); setSalvata(true); Alert.alert('Salvata', 'API key salvata.');
+  };
+  const eliminaApiKey = async () => Alert.alert('Elimina chiave', 'Sei sicuro?', [
+    { text: 'Annulla', style: 'cancel' },
+    { text: 'Elimina', style: 'destructive', onPress: async () => { await SecureStore.deleteItemAsync(CHIAVE_STORAGE); setApiKey(''); setSalvata(false); } },
+  ]);
+  const salvaTabelle = async (nuove) => { setTabelle(nuove); await SecureStore.setItemAsync(TABELLE_STORAGE, JSON.stringify(nuove)); };
+  const salvaTabellaAttiva = async (id) => { setTabellaAttivaId(id); await SecureStore.setItemAsync(TABELLA_ATTIVA_STORAGE, id); };
+  const onSalvaTabella = async (tab) => {
+    const nuove = tabelle.find(t => t.id === tab.id) ? tabelle.map(t => t.id === tab.id ? tab : t) : [...tabelle, tab];
+    await salvaTabelle(nuove); setEditor(null);
+  };
+  const eliminaTabella = (id) => {
+    if (id === 'default' || id === 'a_squadre') { Alert.alert('Errore', 'Le tabelle predefinite non possono essere eliminate.'); return; }
+    Alert.alert('Elimina', 'Sei sicuro?', [{ text: 'Annulla', style: 'cancel' }, { text: 'Elimina', style: 'destructive', onPress: async () => { const n = tabelle.filter(t => t.id !== id); await salvaTabelle(n); if (tabellaAttivaId === id) await salvaTabellaAttiva('default'); } }]);
+  };
+
+  if (loading) return <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5efe6' }}><ActivityIndicator color="#d4af37" size="large" /></View>;
+  if (editor !== null) return <EditorTabella tabella={editor === 'nuova' ? null : editor} onSalva={onSalvaTabella} onAnnulla={() => setEditor(null)} />;
+
+  const tabAttiva = tabelle.find(t => t.id === tabellaAttivaId) ?? TABELLA_DEFAULT;
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <Text style={imp.titolo}>Impostazioni</Text>
+
+        <Text style={imp.sezione}>API KEY ANTHROPIC</Text>
+        <Text style={imp.sub}>Necessaria per l'OCR delle foto. console.anthropic.com</Text>
+        <TextInput style={imp.inputNome} value={apiKey} onChangeText={v => { setApiKey(v); setSalvata(false); }} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+        {salvata && <Text style={imp.ok}>✓ Chiave attiva</Text>}
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+          <TouchableOpacity style={[imp.btn, { flex: 2, backgroundColor: '#1a1a2e' }]} onPress={salvaApiKey}><Text style={{ color: '#d4af37', fontWeight: 'bold' }}>Salva chiave</Text></TouchableOpacity>
+          {salvata && <TouchableOpacity style={[imp.btn, { flex: 1, borderWidth: 1.5, borderColor: '#e74c3c' }]} onPress={eliminaApiKey}><Text style={{ color: '#e74c3c' }}>Elimina</Text></TouchableOpacity>}
+        </View>
+
+        <Text style={[imp.sezione, { marginTop: 24 }]}>TABELLE VICTORY POINTS</Text>
+        {tabelle.map(t => (
+          <View key={t.id} style={imp.rigaTabella}>
+            <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }} onPress={() => salvaTabellaAttiva(t.id)}>
+              <View style={[imp.radio, tabellaAttivaId === t.id && imp.radioOn]} />
+              <Text style={[imp.nomeTab, tabellaAttivaId === t.id && { color: '#1a1a2e', fontWeight: 'bold' }]}>{t.nome}</Text>
+            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              <TouchableOpacity onPress={() => setEditor(t)} style={imp.btnTab}><Text style={{ color: '#7a6a55', fontSize: 12 }}>✏</Text></TouchableOpacity>
+              {t.id !== 'default' && t.id !== 'a_squadre' && <TouchableOpacity onPress={() => eliminaTabella(t.id)} style={imp.btnTab}><Text style={{ color: '#e74c3c', fontSize: 12 }}>✕</Text></TouchableOpacity>}
+            </View>
+          </View>
+        ))}
+
+        <Text style={[imp.sub, { marginTop: 12, marginBottom: 6 }]}>Fasce: {tabAttiva.nome}</Text>
+        <View style={{ flexDirection: 'row', marginBottom: 4 }}>
+          {['Differenza','VP Vin.','VP Per.'].map((h,i) => <Text key={i} style={[imp.th, i===0?{flex:2}:{flex:1}]}>{h}</Text>)}
+        </View>
+        {tabAttiva.righe.map((r, i) => (
+          <View key={i} style={{ flexDirection: 'row', paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: '#f0e8d8', backgroundColor: i%2===0?'#fff':'#fdfaf5' }}>
+            <Text style={[imp.td, { flex: 2 }]}>{r.min} – {r.max === 99999 ? '2505+' : r.max}</Text>
+            <Text style={[imp.td, { flex: 1, color: '#2c5f2e', fontWeight: 'bold' }]}>{r.vpV}</Text>
+            <Text style={[imp.td, { flex: 1, color: '#7a2230', fontWeight: 'bold' }]}>{r.vpP}</Text>
+          </View>
+        ))}
+
+        <TouchableOpacity style={[imp.btn, { backgroundColor: '#1a1a2e', marginTop: 14 }]} onPress={() => setEditor('nuova')}>
+          <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ Nuova tabella</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={onTorna}>
+          <Text style={{ color: '#7a6a55', fontSize: 14 }}>← Torna all'app</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ── App principale ────────────────────────────────────────────────────────────
 function SchermatHome({ onImpostazioni }) {
   const vuoto = () => Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
   const [nomiA, setNomiA] = useState(['', '']);
@@ -485,21 +433,22 @@ function SchermatHome({ onImpostazioni }) {
   const [vpA, setVpA] = useState('');
   const [vpB, setVpB] = useState('');
   const [risultato, setRisultato] = useState(null);
-  const [anteprima, setAnteprima] = useState(null);
-  const [fotoAperta, setFotoAperta] = useState(false);
-  const [stato, setStato] = useState('idle');
+  const [foto, setFoto] = useState(null);
+  const [stato, setStato] = useState('idle'); // idle | analisi | errore
   const [erroreMsg, setErroreMsg] = useState('');
   const [apiKey, setApiKey] = useState(null);
   const [tabella, setTabella] = useState(TABELLA_DEFAULT);
+  const [pagina, setPagina] = useState(1); // 0=foto, 1=griglia
+  const pagerRef = useRef(null);
 
   useEffect(() => {
     const carica = async () => {
       const k = await SecureStore.getItemAsync(CHIAVE_STORAGE);
       setApiKey(k ?? null);
       const t = await SecureStore.getItemAsync(TABELLE_STORAGE);
-      const tabelle = t ? JSON.parse(t) : TABELLE_DEFAULT;
+      const tabs = t ? JSON.parse(t) : TABELLE_DEFAULT;
       const ta = await SecureStore.getItemAsync(TABELLA_ATTIVA_STORAGE) ?? 'default';
-      setTabella(tabelle.find(x => x.id === ta) ?? TABELLA_DEFAULT);
+      setTabella(tabs.find(x => x.id === ta) ?? TABELLA_DEFAULT);
     };
     carica();
     const timer = setInterval(carica, 2000);
@@ -511,13 +460,13 @@ function SchermatHome({ onImpostazioni }) {
     verificaColonna(a, 'A').forEach(e => { errori.push(e); indiciErrA.push(e.smazzata - 1); });
     verificaColonna(b, 'B').forEach(e => { errori.push(e); indiciErrB.push(e.smazzata - 1); });
     const wA = validaValori(a, 'A'); const wB = validaValori(b, 'B');
-    wA.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia A: ${w.tipo} "${w.valore}" non è multiplo valido` }));
-    wB.forEach(w => errori.push({ desc: `Mano ${w.smazzata} Coppia B: ${w.tipo} "${w.valore}" non è multiplo valido` }));
+    wA.forEach(w => errori.push({ desc: `M${w.smazzata} Coppia A: ${w.tipo} "${w.valore}" non è multiplo valido` }));
+    wB.forEach(w => errori.push({ desc: `M${w.smazzata} Coppia B: ${w.tipo} "${w.valore}" non è multiplo valido` }));
     const totA = Number(a[3]?.totale) || 0; const totB = Number(b[3]?.totale) || 0;
     const vpCalcolati = tab ? calcolaVPdaTabella(tab, totA - totB) : null;
     const erroriRiepilogo = { vpA: false, vpB: false };
-    if (vpCalcolati && vA !== '' && Number(vA) !== vpCalcolati.vpA) { errori.push({ desc: `VP Coppia A: scritto ${vA}, atteso ${vpCalcolati.vpA}` }); erroriRiepilogo.vpA = true; }
-    if (vpCalcolati && vB !== '' && Number(vB) !== vpCalcolati.vpB) { errori.push({ desc: `VP Coppia B: scritto ${vB}, atteso ${vpCalcolati.vpB}` }); erroriRiepilogo.vpB = true; }
+    if (vpCalcolati && vA !== '' && Number(vA) !== vpCalcolati.vpA) { errori.push({ desc: `VP A: scritto ${vA}, atteso ${vpCalcolati.vpA}` }); erroriRiepilogo.vpA = true; }
+    if (vpCalcolati && vB !== '' && Number(vB) !== vpCalcolati.vpB) { errori.push({ desc: `VP B: scritto ${vB}, atteso ${vpCalcolati.vpB}` }); erroriRiepilogo.vpB = true; }
     return { ok: errori.length === 0, errori, indiciErrA, indiciErrB, erroriRiepilogo, warnA: wA, warnB: wB };
   }, []);
 
@@ -528,8 +477,8 @@ function SchermatHome({ onImpostazioni }) {
     else setRisultato(null);
   }, [datiA, datiB, vpA, vpB, tabella]);
 
-  const aggiorna = useCallback((setter, idx, campo, valore) => {
-    setter(prev => { const c = prev.map(r => ({ ...r })); c[idx][campo] = valore; return c; });
+  const aggiorna = useCallback((setter, idx, campo, val) => {
+    setter(prev => { const c = prev.map(r => ({ ...r })); c[idx][campo] = val; return c; });
   }, []);
 
   const controllaApiKey = () => {
@@ -539,22 +488,41 @@ function SchermatHome({ onImpostazioni }) {
 
   const salvaInAlbumBurraco = async (uri) => {
     try {
-      // Chiede permesso di scrittura in galleria
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') return;
-
-      // Salva l'asset nella libreria
       const asset = await MediaLibrary.createAssetAsync(uri);
-
-      // Cerca o crea l'album "Burraco"
       let album = await MediaLibrary.getAlbumAsync('Burraco');
-      if (album === null) {
-        await MediaLibrary.createAlbumAsync('Burraco', asset, false);
-      } else {
-        await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
-      }
-    } catch (_) {
-      // Salvataggio in galleria fallito silenziosamente — non blocca il flusso
+      if (!album) await MediaLibrary.createAlbumAsync('Burraco', asset, false);
+      else await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+    } catch (_) {}
+  };
+
+  const elaboraFoto = async (uri) => {
+    setFoto(uri);
+    setStato('analisi');
+    setRisultato(null);
+    setErroreMsg('');
+    // Vai sulla pagina foto per vedere l'anteprima durante l'analisi
+    pagerRef.current?.scrollTo({ x: 0, animated: true });
+    setPagina(0);
+    try {
+      const dati = await estraiDatiDaFoto(uri, apiKey);
+      const toStr = v => String(parseValore(v));
+      const nA = dati.smazzate.map(sm => ({ base: toStr(sm.a.base), punti: toStr(sm.a.punti), totale: toStr(sm.a.totale) }));
+      const nB = dati.smazzate.map(sm => ({ base: toStr(sm.b.base), punti: toStr(sm.b.punti), totale: toStr(sm.b.totale) }));
+      setNomiA(dati.nomiA?.length ? dati.nomiA : ['', '']);
+      setNomiB(dati.nomiB?.length ? dati.nomiB : ['', '']);
+      setDatiA(nA); setDatiB(nB);
+      setVpA(toStr(dati.vpA)); setVpB(toStr(dati.vpB));
+      setStato('idle');
+      // Vai alla griglia dopo l'analisi
+      setTimeout(() => {
+        pagerRef.current?.scrollTo({ x: SW, animated: true });
+        setPagina(1);
+      }, 400);
+    } catch (e) {
+      setStato('errore');
+      setErroreMsg(e.message);
     }
   };
 
@@ -564,10 +532,8 @@ function SchermatHome({ onImpostazioni }) {
     if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera."); return; }
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1.0, base64: false });
     if (!res.canceled && res.assets?.[0]?.uri) {
-      const uri = res.assets[0].uri;
-      // Salva in galleria nell'album Burraco (in background, non blocca)
-      salvaInAlbumBurraco(uri);
-      elaboraFoto(uri);
+      salvaInAlbumBurraco(res.assets[0].uri);
+      elaboraFoto(res.assets[0].uri);
     }
   };
 
@@ -579,105 +545,118 @@ function SchermatHome({ onImpostazioni }) {
     if (!res.canceled && res.assets?.[0]?.uri) elaboraFoto(res.assets[0].uri);
   };
 
-  const elaboraFoto = async (uri) => {
-    setAnteprima(uri); setStato('analisi'); setRisultato(null); setErroreMsg('');
-    try {
-      const dati = await estraiDatiDaFoto(uri, apiKey);
-      const toStr = v => String(parseValore(v));
-      const nuoviA = dati.smazzate.map(sm => ({ base: toStr(sm.a.base), punti: toStr(sm.a.punti), totale: toStr(sm.a.totale) }));
-      const nuoviB = dati.smazzate.map(sm => ({ base: toStr(sm.b.base), punti: toStr(sm.b.punti), totale: toStr(sm.b.totale) }));
-      const nVpA = toStr(dati.vpA); const nVpB = toStr(dati.vpB);
-      setNomiA(dati.nomiA?.length ? dati.nomiA : ['', '']);
-      setNomiB(dati.nomiB?.length ? dati.nomiB : ['', '']);
-      setDatiA(nuoviA); setDatiB(nuoviB); setVpA(nVpA); setVpB(nVpB);
-      setStato('fatto');
-    } catch (e) { setStato('errore'); setErroreMsg(e.message); }
+  const reset = () => {
+    setDatiA(vuoto()); setDatiB(vuoto()); setNomiA(['', '']); setNomiB(['', '']);
+    setVpA(''); setVpB(''); setRisultato(null); setFoto(null); setStato('idle'); setErroreMsg('');
+    pagerRef.current?.scrollTo({ x: SW, animated: true }); setPagina(1);
   };
 
-  const reset = () => { setDatiA(vuoto()); setDatiB(vuoto()); setNomiA(['', '']); setNomiB(['', '']); setVpA(''); setVpB(''); setRisultato(null); setAnteprima(null); setFotoAperta(false); setStato('idle'); setErroreMsg(''); };
-  const ris = risultato;
+  // Header compatto
+  const header = (
+    <View style={h.header}>
+      <TouchableOpacity onPress={() => { pagerRef.current?.scrollTo({ x: 0, animated: true }); setPagina(0); }} style={h.btnFoto}>
+        <Text style={h.btnFotoT}>📷</Text>
+      </TouchableOpacity>
+      <Text style={h.titolo}>CONTROLLA PUNTI</Text>
+      <TouchableOpacity onPress={onImpostazioni} style={h.btnImp}>
+        <Text style={h.btnImpT}>⚙</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  // Indicatori pagina
+  const indicatori = (
+    <View style={h.indicatori}>
+      <View style={[h.dot, pagina === 0 && h.dotOn]} />
+      <View style={[h.dot, pagina === 1 && h.dotOn]} />
+    </View>
+  );
+
+  // Pagina 0: foto
+  const paginaFoto = (
+    <View style={{ width: SW, flex: 1 }}>
+      {stato === 'analisi' ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
+          <ActivityIndicator color="#d4af37" size="large" />
+          <Text style={{ color: '#d4af37', marginTop: 12, fontSize: 14 }}>Analisi in corso…</Text>
+        </View>
+      ) : foto ? (
+        <ScrollView
+          style={{ flex: 1, backgroundColor: '#000' }}
+          contentContainerStyle={{ flex: 1 }}
+          maximumZoomScale={5}
+          minimumZoomScale={1}
+          centerContent
+          showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
+        >
+          <Image source={{ uri: foto }} style={{ width: SW, flex: 1 }} resizeMode="contain" />
+        </ScrollView>
+      ) : (
+        <View style={{ flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
+          <TouchableOpacity style={h.btnScanGrande} onPress={scattaFoto}>
+            <Text style={{ fontSize: 40 }}>📷</Text>
+            <Text style={{ color: '#d4af37', fontSize: 16, fontWeight: 'bold', marginTop: 8 }}>Fotocamera</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={h.btnScanGrande} onPress={caricaDaLibreria}>
+            <Text style={{ fontSize: 40 }}>🖼</Text>
+            <Text style={{ color: '#d4af37', fontSize: 16, fontWeight: 'bold', marginTop: 8 }}>Libreria</Text>
+          </TouchableOpacity>
+          {stato === 'errore' && <Text style={{ color: '#e74c3c', textAlign: 'center', paddingHorizontal: 24, fontSize: 13 }}>⚠ {erroreMsg}</Text>}
+        </View>
+      )}
+      {foto && stato !== 'analisi' && (
+        <View style={h.fotoBar}>
+          <TouchableOpacity style={h.btnFotoBar} onPress={scattaFoto}><Text style={h.btnFotoBarT}>📷 Nuova</Text></TouchableOpacity>
+          <TouchableOpacity style={h.btnFotoBar} onPress={caricaDaLibreria}><Text style={h.btnFotoBarT}>🖼 Libreria</Text></TouchableOpacity>
+          <TouchableOpacity style={[h.btnFotoBar, { borderColor: '#7a6a55' }]} onPress={reset}><Text style={[h.btnFotoBarT, { color: '#7a6a55' }]}>↺ Reset</Text></TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+
+  // Pagina 1: griglia
+  const paginaGriglia = (
+    <View style={{ width: SW, flex: 1 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 6 }}>
+          <Text style={{ fontSize: 10, color: '#9a8a75', letterSpacing: 1 }}>VP: {tabella.nome}</Text>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity onPress={reset} style={{ paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: '#c8b89a', borderRadius: 8 }}>
+            <Text style={{ color: '#7a6a55', fontSize: 12 }}>↺ Reset</Text>
+          </TouchableOpacity>
+        </View>
+        <Griglia
+          datiA={datiA} datiB={datiB} vpA={vpA} vpB={vpB}
+          onChangeA={(i, k, v) => aggiorna(setDatiA, i, k, v)}
+          onChangeB={(i, k, v) => aggiorna(setDatiB, i, k, v)}
+          onChangeVpA={v => setVpA(v)} onChangeVpB={v => setVpB(v)}
+          risultato={risultato} tabella={tabella}
+          nomiA={nomiA} nomiB={nomiB}
+        />
+        <PannelloRisultato risultato={risultato} />
+      </ScrollView>
+    </View>
+  );
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f5efe6' }}>
       <StatusBar style="light" />
-      <FotoViewer uri={fotoAperta ? anteprima : null} onClose={() => setFotoAperta(false)} />
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-        <View style={s.header}>
-          <Text style={s.titolo}>BURRACO</Text>
-          <Text style={s.sottotitolo}>Verifica Punteggi</Text>
-          <TouchableOpacity style={s.btnImp} onPress={onImpostazioni}><Text style={s.btnImpT}>⚙ Impostazioni</Text></TouchableOpacity>
-        </View>
-        <View style={s.bannerTabella}>
-          <Text style={s.bannerTabellaT}>📊 Tabella VP attiva: <Text style={{ fontWeight: 'bold' }}>{tabella.nome}</Text></Text>
-        </View>
-        <View style={{ padding: 14 }}>
-          {stato === 'analisi' ? (
-            <View style={s.loading}><ActivityIndicator color="#d4af37" size="large" /><Text style={s.loadingT}>Analisi in corso…</Text></View>
-          ) : anteprima ? (
-            <View style={{ gap: 8 }}>
-              <TouchableOpacity onPress={() => setFotoAperta(true)} activeOpacity={0.85}>
-                <Image source={{ uri: anteprima }} style={s.anteprima} resizeMode="cover" />
-                <View style={s.zoomHint}><Text style={s.zoomHintT}>🔍 Tocca per ingrandire</Text></View>
-              </TouchableOpacity>
-              <View style={s.btnRiga}>
-                <TouchableOpacity style={s.btnSec} onPress={scattaFoto}><Text style={s.btnSecT}>📷 Nuova foto</Text></TouchableOpacity>
-                <TouchableOpacity style={s.btnSec} onPress={caricaDaLibreria}><Text style={s.btnSecT}>🖼 Libreria</Text></TouchableOpacity>
-              </View>
-            </View>
-          ) : (
-            <View style={s.btnRiga}>
-              <TouchableOpacity style={s.btnScan} onPress={scattaFoto}><Text style={s.btnScanIcona}>📷</Text><Text style={s.btnScanT}>Fotocamera</Text></TouchableOpacity>
-              <TouchableOpacity style={s.btnScan} onPress={caricaDaLibreria}><Text style={s.btnScanIcona}>🖼</Text><Text style={s.btnScanT}>Libreria</Text></TouchableOpacity>
-            </View>
-          )}
-          {stato === 'errore' && <View style={s.erroreApi}><Text style={s.erroreApiT}>⚠ {erroreMsg}</Text></View>}
-        </View>
-        <View style={s.nomiSection}>
-          {[{ label: 'COPPIA A', nomi: nomiA, setNomi: setNomiA, colore: '#2c5f2e' }, { label: 'COPPIA B', nomi: nomiB, setNomi: setNomiB, colore: '#7a2230' }].map(({ label, nomi, setNomi, colore }) => (
-            <View key={label} style={s.nomiCol}>
-              <Text style={[s.nomiHead, { color: colore }]}>{label}</Text>
-              {[0, 1].map(i => <TextInput key={i} style={s.inputNome} value={nomi[i]} onChangeText={v => { const n = [...nomi]; n[i] = v; setNomi(n); }} placeholder={`Giocatore ${i + 1}`} placeholderTextColor="#b0a080" />)}
-            </View>
-          ))}
-        </View>
-        <View style={s.griglia}>
-          {Array.from({ length: SMAZZATE }, (_, i) => (
-            <BloccoMano key={i} idx={i} datiA={datiA[i]} datiB={datiB[i]}
-              onChangeA={(idx, k, v) => aggiorna(setDatiA, idx, k, v)}
-              onChangeB={(idx, k, v) => aggiorna(setDatiB, idx, k, v)}
-              erroriA={ris?.indiciErrA ?? []} erroriB={ris?.indiciErrB ?? []}
-              warnA={ris?.warnA ?? []} warnB={ris?.warnB ?? []} />
-          ))}
-          <BloccoRiepilogo datiA={datiA} datiB={datiB} vpA={vpA} vpB={vpB}
-            onChangeVpA={v => setVpA(v)} onChangeVpB={v => setVpB(v)}
-            erroriRiepilogo={ris?.erroriRiepilogo ?? {}} tabella={tabella} />
-        </View>
-        <View style={s.pulsanti}>
-          <TouchableOpacity style={[s.btnReset, { flex: 1 }]} onPress={reset}><Text style={s.btnResetT}>↺ Reset</Text></TouchableOpacity>
-        </View>
-        {ris && (
-          <View style={[s.risultatoBox, ris.ok ? s.boxOk : s.boxErr]}>
-            {ris.ok ? (
-              <View style={s.rigaOk}><Text style={s.iconaOk}>✓</Text><View><Text style={s.testoOk}>Tutto corretto!</Text><Text style={s.subOk}>Somme, differenza e Victory Point verificati.</Text></View></View>
-            ) : (
-              <View>
-                <View style={s.rigaErrHeader}><Text style={s.iconaErr}>✗</Text><Text style={s.testoErr}>{testoErrori(ris.errori.length)}</Text></View>
-                {ris.errori.map((e, i) => (
-                  <View key={i} style={s.rigaErrore}>
-                    {e.colonna ? <View style={[s.tag, { backgroundColor: e.colonna === 'A' ? '#2c5f2e' : '#7a2230', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 11 }]}>{e.colonna}</Text></View>
-                      : <View style={[s.tag, { backgroundColor: '#b8860b', width: 20, height: 20 }]}><Text style={[s.tagT, { fontSize: 9 }]}>!</Text></View>}
-                    <View style={{ flex: 1 }}>
-                      {e.desc ? <Text style={s.errDet}>{e.desc}</Text>
-                        : <><Text style={s.errDet}>Mano {e.smazzata} — scritto <Text style={{ fontWeight: 'bold' }}>{e.scritto}</Text>, atteso <Text style={{ fontWeight: 'bold' }}>{e.atteso}</Text></Text>
-                           <Text style={s.errDiff}>Differenza: {e.atteso - e.scritto > 0 ? '+' : ''}{e.atteso - e.scritto} punti</Text></>}
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-        )}
+      {header}
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={e => setPagina(Math.round(e.nativeEvent.contentOffset.x / SW))}
+        style={{ flex: 1 }}
+        scrollEventThrottle={16}
+        nestedScrollEnabled
+      >
+        {paginaFoto}
+        {paginaGriglia}
       </ScrollView>
+      {indicatori}
     </SafeAreaView>
   );
 }
@@ -688,86 +667,69 @@ export default function App() {
   return <SchermatHome onImpostazioni={() => setSchermata('impostazioni')} />;
 }
 
-const s = StyleSheet.create({
-  centrato: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5efe6' },
-  header: { backgroundColor: '#1a1a2e', paddingTop: 20, paddingBottom: 14, alignItems: 'center' },
-  titolo: { fontSize: 30, letterSpacing: 8, color: '#d4af37', fontWeight: 'bold' },
-  sottotitolo: { fontSize: 11, color: '#a0a0c0', letterSpacing: 2, textTransform: 'uppercase', marginTop: 4 },
-  btnImp: { marginTop: 10, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: '#d4af3766', borderRadius: 20 },
-  btnImpT: { color: '#d4af37', fontSize: 12 },
-  bannerTabella: { backgroundColor: '#16213e', borderBottomWidth: 1, borderBottomColor: '#d4af3744', padding: 8, paddingHorizontal: 16 },
-  bannerTabellaT: { color: '#a0a0c0', fontSize: 11 },
-  btnRiga: { flexDirection: 'row', gap: 10 },
-  btnScan: { flex: 1, backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#d4af37', borderStyle: 'dashed', borderRadius: 12, padding: 18, alignItems: 'center', gap: 4 },
-  btnScanIcona: { fontSize: 28 },
-  btnScanT: { color: '#d4af37', fontSize: 14, fontWeight: 'bold' },
-  anteprima: { width: '100%', height: 180, borderRadius: 10, borderWidth: 2, borderColor: '#d4af37' },
-  zoomHint: { position: 'absolute', bottom: 6, right: 8, backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  zoomHintT: { color: '#fff', fontSize: 10 },
-  btnSec: { flex: 1, borderWidth: 1, borderColor: '#c8b89a', borderRadius: 8, padding: 8, alignItems: 'center' },
-  btnSecT: { color: '#7a6a55', fontSize: 13 },
-  loading: { alignItems: 'center', padding: 24, gap: 10 },
-  loadingT: { color: '#7a6a55', fontSize: 14, fontStyle: 'italic' },
-  erroreApi: { marginTop: 8, padding: 12, backgroundColor: '#fdf0f0', borderWidth: 1, borderColor: '#e74c3c', borderRadius: 8 },
-  erroreApiT: { color: '#c0392b', fontSize: 13 },
-  nomiSection: { flexDirection: 'row', gap: 10, paddingHorizontal: 12, paddingBottom: 6 },
-  nomiCol: { flex: 1, gap: 5 },
-  nomiHead: { fontSize: 10, letterSpacing: 1.5, fontWeight: 'bold', textTransform: 'uppercase' },
-  inputNome: { borderWidth: 1, borderColor: '#c8b89a', borderRadius: 6, padding: 7, fontSize: 13, backgroundColor: '#fffdf8', color: '#3a2e22' },
-  griglia: { paddingHorizontal: 12, gap: 8 },
-  blocco: { backgroundColor: '#fff', borderRadius: 10, borderWidth: 1.5, borderColor: '#ddd0b8', overflow: 'hidden', elevation: 2 },
-  bloccoHeader: { backgroundColor: '#1a1a2e', padding: 7, paddingHorizontal: 12 },
-  manoNum: { color: '#d4af37', fontSize: 11, fontWeight: 'bold', letterSpacing: 2, textTransform: 'uppercase' },
-  rigaHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, backgroundColor: '#fdfaf5', borderBottomWidth: 1, borderBottomColor: '#f0e8d8' },
-  etSpazio: { width: 54 },
-  col: { flex: 1, alignItems: 'center' },
-  tag: { width: 24, height: 24, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
-  tagT: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
-  riga: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: '#f0e8d8', backgroundColor: '#fff' },
-  rigaTotale: { backgroundColor: '#faf6f0', borderTopWidth: 2, borderTopColor: '#e8dcc8' },
-  rigaLabel: { width: 54, fontSize: 9, letterSpacing: 1, color: '#9a8a75', fontWeight: 'bold', textTransform: 'uppercase' },
-  campoWrap: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'center', gap: 3 },
-  btnSegno: { width: 24, height: 34, borderRadius: 5, backgroundColor: '#1a1a2e', alignItems: 'center', justifyContent: 'center' },
-  btnSegnoT: { color: '#d4af37', fontSize: 16, fontWeight: 'bold', lineHeight: 20 },
-  input: { borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 2, fontSize: 15, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8', flex: 1 },
-  inputErr: { borderColor: '#e74c3c', backgroundColor: '#fff0ee' },
-  inputWarn: { borderColor: '#e67e22', backgroundColor: '#fff8ee' },
-  totaleCalc: { fontSize: 18, fontWeight: 'bold', color: '#2a1e12', textAlign: 'center' },
-  diffCalc: { fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
-  diffVuoto: { fontSize: 16, color: '#ccc', textAlign: 'center' },
-  vpCalc: { fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
-  pulsanti: { flexDirection: 'row', gap: 10, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
-  btnVerifica: { flex: 2, backgroundColor: '#1a1a2e', borderRadius: 10, padding: 14, alignItems: 'center', elevation: 4 },
-  btnVerificaT: { color: '#d4af37', fontSize: 15, fontWeight: 'bold', letterSpacing: 1 },
-  btnReset: { flex: 1, borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 10, padding: 14, alignItems: 'center' },
-  btnResetT: { color: '#7a6a55', fontSize: 14 },
-  risultatoBox: { marginHorizontal: 12, marginTop: 4, borderRadius: 10, borderWidth: 1.5, padding: 14 },
+// ── Stili griglia ─────────────────────────────────────────────────────────────
+const g = StyleSheet.create({
+  griglia: { marginHorizontal: 8, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#ddd0b8' },
+  riga: { flexDirection: 'row', alignItems: 'center' },
+  labelCol: { width: 46, paddingLeft: 6, justifyContent: 'center' },
+  labelT: { fontSize: 9, color: '#9a8a75', letterSpacing: 0.5, textTransform: 'uppercase' },
+  colA: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
+  colB: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
+  headerNome: { fontSize: 11, color: '#d4af37', fontWeight: 'bold', textAlign: 'center', letterSpacing: 0.5 },
+  separatoreMano: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2a2a3e', paddingHorizontal: 8, paddingVertical: 3 },
+  separatoreT: { fontSize: 9, color: '#a0a0c0', letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 'bold' },
+  cellWrap: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  segnoBtn: { width: 18, height: 24, backgroundColor: '#1a1a2e', borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
+  segnoT: { color: '#d4af37', fontSize: 13, lineHeight: 16 },
+  cellInput: { flex: 1, fontSize: 14, textAlign: 'center', color: '#2a1e12', borderWidth: 1, borderColor: '#ddd0b8', borderRadius: 4, paddingVertical: 3, paddingHorizontal: 1, backgroundColor: 'transparent' },
+  cellErr: { borderColor: '#e74c3c', backgroundColor: '#fff0ee', color: '#c0392b' },
+  cellWarn: { borderColor: '#e67e22', backgroundColor: '#fff8ee' },
+  cellBold: { fontWeight: 'bold', fontSize: 15 },
+  staticVal: { fontSize: 15, fontWeight: 'bold', textAlign: 'center', color: '#2a1e12' },
+});
+
+// ── Stili risultato ───────────────────────────────────────────────────────────
+const r = StyleSheet.create({
+  box: { margin: 8, borderRadius: 8, padding: 10, borderWidth: 1.5 },
   boxOk: { backgroundColor: '#eafaf1', borderColor: '#2ecc71' },
   boxErr: { backgroundColor: '#fdf0f0', borderColor: '#e74c3c' },
-  rigaOk: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconaOk: { fontSize: 28, color: '#2ecc71', fontWeight: 'bold' },
-  testoOk: { fontSize: 14, color: '#1a6b3a', fontWeight: 'bold' },
-  subOk: { fontSize: 11, color: '#4a9a6a', marginTop: 2 },
-  rigaErrHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  iconaErr: { fontSize: 24, color: '#e74c3c', fontWeight: 'bold' },
-  testoErr: { fontSize: 14, color: '#c0392b', fontWeight: 'bold' },
-  rigaErrore: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
-  errDet: { fontSize: 13, color: '#5a2020', flex: 1, flexWrap: 'wrap' },
-  errDiff: { fontSize: 11, color: '#c0392b', marginTop: 2 },
-  card: { margin: 16, backgroundColor: '#fff', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#ddd0b8' },
-  cardTitolo: { fontSize: 13, fontWeight: 'bold', color: '#3a2e22', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 },
-  testo: { fontSize: 14, color: '#5a4a3a', lineHeight: 21, marginBottom: 10 },
-  inputLabel: { fontSize: 11, letterSpacing: 1.5, color: '#7a6a55', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: 8 },
-  salvataMsg: { marginTop: 8, fontSize: 13, color: '#2c5f2e', fontWeight: 'bold' },
+  ok: { color: '#1a6b3a', fontWeight: 'bold', fontSize: 14 },
+  errTitolo: { color: '#c0392b', fontWeight: 'bold', fontSize: 13, marginBottom: 6 },
+  errRiga: { color: '#5a2020', fontSize: 12, marginBottom: 3 },
+});
+
+// ── Stili header e navigazione ────────────────────────────────────────────────
+const h = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a2e', paddingHorizontal: 12, paddingVertical: 10 },
+  titolo: { flex: 1, textAlign: 'center', color: '#d4af37', fontSize: 14, fontWeight: 'bold', letterSpacing: 2 },
+  btnFoto: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  btnFotoT: { fontSize: 20 },
+  btnImp: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  btnImpT: { fontSize: 20, color: '#a0a0c0' },
+  indicatori: { flexDirection: 'row', justifyContent: 'center', gap: 6, paddingVertical: 6, backgroundColor: '#1a1a2e' },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#404060' },
+  dotOn: { backgroundColor: '#d4af37', width: 18 },
+  fotoBar: { flexDirection: 'row', gap: 8, padding: 10, backgroundColor: 'rgba(0,0,0,0.7)' },
+  btnFotoBar: { flex: 1, borderWidth: 1, borderColor: '#d4af37', borderRadius: 8, padding: 8, alignItems: 'center' },
+  btnFotoBarT: { color: '#d4af37', fontSize: 13 },
+  btnScanGrande: { alignItems: 'center', borderWidth: 2, borderColor: '#d4af37', borderStyle: 'dashed', borderRadius: 16, padding: 24, width: SW * 0.6 },
+});
+
+// ── Stili impostazioni ────────────────────────────────────────────────────────
+const imp = StyleSheet.create({
+  titolo: { fontSize: 20, fontWeight: 'bold', color: '#1a1a2e', letterSpacing: 1, marginBottom: 20 },
+  sezione: { fontSize: 10, letterSpacing: 2, color: '#9a8a75', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 8 },
+  sub: { fontSize: 13, color: '#7a6a55', marginBottom: 10, lineHeight: 18 },
+  ok: { color: '#2c5f2e', fontWeight: 'bold', fontSize: 13, marginTop: 6 },
+  inputNome: { borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 8, padding: 12, fontSize: 14, color: '#2a1e12', backgroundColor: '#fffdf8', marginBottom: 4 },
+  btn: { borderRadius: 10, padding: 14, alignItems: 'center' },
   rigaTabella: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f0e8d8' },
-  radioBtnWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  radioBtn: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#c8b89a', backgroundColor: '#fff' },
-  radioBtnAttivo: { borderColor: '#1a1a2e', backgroundColor: '#1a1a2e' },
-  nomeTabellaT: { fontSize: 14, color: '#7a6a55' },
-  btnTabAzione: { paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: '#e8dcc8', borderRadius: 6 },
-  colTh: { fontSize: 10, fontWeight: 'bold', color: '#9a8a75', textTransform: 'uppercase', textAlign: 'center' },
-  cellTh: { fontSize: 13, color: '#3a2e22', textAlign: 'center' },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#c8b89a', backgroundColor: '#fff' },
+  radioOn: { borderColor: '#1a1a2e', backgroundColor: '#1a1a2e' },
+  nomeTab: { fontSize: 14, color: '#7a6a55' },
+  btnTab: { paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#e8dcc8', borderRadius: 6 },
+  th: { fontSize: 10, fontWeight: 'bold', color: '#9a8a75', textTransform: 'uppercase', textAlign: 'center' },
+  td: { fontSize: 13, color: '#3a2e22', textAlign: 'center' },
   inputTh: { borderWidth: 1, borderColor: '#c8b89a', borderRadius: 5, padding: 6, fontSize: 13, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8' },
-  btnRimuovi: { width: 30, alignItems: 'center', justifyContent: 'center' },
-  btnAggiungiRiga: { marginTop: 10, padding: 10, borderWidth: 1, borderColor: '#d4af37', borderRadius: 8, alignItems: 'center', borderStyle: 'dashed' },
+  btnAdd: { marginTop: 10, padding: 10, borderWidth: 1, borderColor: '#d4af37', borderRadius: 8, alignItems: 'center', borderStyle: 'dashed' },
 });
