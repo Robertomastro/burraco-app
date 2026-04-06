@@ -63,9 +63,12 @@ jobs:
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
 
+      - name: Trova APK
+        run: find android/app/build/outputs -name "*.apk" 2>/dev/null
+
       - name: Carica APK
         uses: actions/upload-artifact@v4
         with:
           name: burraco-app-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: android/app/build/outputs/apk/**/*.apk
           retention-days: 30
