@@ -100,9 +100,10 @@ async function estraiDatiDaFoto(uri, apiKey) {
   const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
   const risposta = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'interleaved-thinking-2025-05-14' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: SYSTEM_PROMPT,
+      model: 'claude-sonnet-4-20250514', max_tokens: 8000, system: SYSTEM_PROMPT,
+      thinking: { type: 'enabled', budget_tokens: 5000 },
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
         { type: 'text', text: 'Leggi questo segnapunti di Burraco seguendo la procedura. Restituisci il JSON finale.' },
@@ -141,16 +142,17 @@ function validaValori(righe, etichetta) {
   return errori;
 }
 
-// ── Campo compatto con +/- ────────────────────────────────────────────────────
+// ── Campo compatto con +/- colorato ──────────────────────────────────────────
 function C({ value, onChange, errore, warn, bold }) {
+  const isNeg = value?.startsWith('-');
   const toggleSegno = () => {
     const n = parseInt(value, 10);
     if (!isNaN(n) && n !== 0) onChange(String(-n));
   };
   return (
     <View style={g.cellWrap}>
-      <TouchableOpacity onPress={toggleSegno} style={g.segnoBtn}>
-        <Text style={g.segnoT}>{value?.startsWith('-') ? '−' : '+'}</Text>
+      <TouchableOpacity onPress={toggleSegno} style={[g.segnoBtn, isNeg ? g.segnoBtnNeg : g.segnoBtnPos]}>
+        <Text style={g.segnoT}>{isNeg ? '−' : '+'}</Text>
       </TouchableOpacity>
       <TextInput
         keyboardType="number-pad"
@@ -183,13 +185,15 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
   const coloreRiga = (i) => i % 2 === 0 ? '#fff' : '#fafaf7';
 
   const rigaHeader = (
-    <View style={[g.riga, { height: HEADER_H, backgroundColor: '#1a1a2e' }]}>
+    <View style={[g.riga, { minHeight: HEADER_H, backgroundColor: '#1a1a2e', paddingVertical: 4 }]}>
       <View style={g.labelCol} />
       <View style={g.colA}>
-        <Text style={g.headerNome} numberOfLines={1}>{nomiA.filter(Boolean).join('/') || 'A'}</Text>
+        {nomiA.filter(Boolean).map((n, i) => <Text key={i} style={g.headerNome} numberOfLines={1}>{n}</Text>)}
+        {!nomiA.filter(Boolean).length && <Text style={g.headerNome}>A</Text>}
       </View>
       <View style={g.colB}>
-        <Text style={g.headerNome} numberOfLines={1}>{nomiB.filter(Boolean).join('/') || 'B'}</Text>
+        {nomiB.filter(Boolean).map((n, i) => <Text key={i} style={g.headerNome} numberOfLines={1}>{n}</Text>)}
+        {!nomiB.filter(Boolean).length && <Text style={g.headerNome}>B</Text>}
       </View>
     </View>
   );
@@ -224,7 +228,8 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
     const wB = ris?.warnB ?? [];
     const bg1 = i % 2 === 0 ? '#fff' : '#fafaf7';
     const bg2 = i % 2 === 0 ? '#f9f6f0' : '#f4f1ea';
-    mani.push(separatoreMano(i));
+    // Sottile separatore tra mani (tranne prima)
+    if (i > 0) mani.push(<View key={`div${i}`} style={g.divider} />);
     mani.push(
       <View key={`m${i}`}>
         {rigaDati('BASE',
@@ -257,7 +262,7 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
     <View style={g.griglia}>
       {rigaHeader}
       {mani}
-      <View style={g.separatoreMano}><Text style={g.separatoreT}>RIEPILOGO</Text></View>
+      <View style={g.dividerRiepilogo} />
       {rigaStatica('TOT.', String(totA), String(totB), '#2c5f2e', '#7a2230', '#fff')}
       {rigaStatica('DIFF.', diffA, diffB, '#2c5f2e', '#7a2230', '#f9f6f0')}
       {rigaDati('V.P.', vpA, vpB,
@@ -675,17 +680,19 @@ const g = StyleSheet.create({
   labelT: { fontSize: 9, color: '#9a8a75', letterSpacing: 0.5, textTransform: 'uppercase' },
   colA: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
   colB: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
-  headerNome: { fontSize: 11, color: '#d4af37', fontWeight: 'bold', textAlign: 'center', letterSpacing: 0.5 },
-  separatoreMano: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2a2a3e', paddingHorizontal: 8, paddingVertical: 3 },
-  separatoreT: { fontSize: 9, color: '#a0a0c0', letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 'bold' },
+  headerNome: { fontSize: 11, color: '#d4af37', fontWeight: 'bold', textAlign: 'center', letterSpacing: 0.3 },
+  divider: { height: 2, backgroundColor: '#2a2a3e' },
+  dividerRiepilogo: { height: 3, backgroundColor: '#1a1a2e' },
   cellWrap: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  segnoBtn: { width: 18, height: 24, backgroundColor: '#1a1a2e', borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
-  segnoT: { color: '#d4af37', fontSize: 13, lineHeight: 16 },
-  cellInput: { flex: 1, fontSize: 14, textAlign: 'center', color: '#2a1e12', borderWidth: 1, borderColor: '#ddd0b8', borderRadius: 4, paddingVertical: 3, paddingHorizontal: 1, backgroundColor: 'transparent' },
+  segnoBtn: { width: 20, height: 28, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+  segnoBtnPos: { backgroundColor: '#2c5f2e' },
+  segnoBtnNeg: { backgroundColor: '#7a2230' },
+  segnoT: { color: '#fff', fontSize: 14, lineHeight: 18, fontWeight: 'bold' },
+  cellInput: { flex: 1, fontSize: 17, textAlign: 'center', color: '#2a1e12', borderWidth: 1, borderColor: '#ddd0b8', borderRadius: 4, paddingVertical: 4, paddingHorizontal: 1, backgroundColor: 'transparent' },
   cellErr: { borderColor: '#e74c3c', backgroundColor: '#fff0ee', color: '#c0392b' },
   cellWarn: { borderColor: '#e67e22', backgroundColor: '#fff8ee' },
-  cellBold: { fontWeight: 'bold', fontSize: 15 },
-  staticVal: { fontSize: 15, fontWeight: 'bold', textAlign: 'center', color: '#2a1e12' },
+  cellBold: { fontWeight: 'bold', fontSize: 18 },
+  staticVal: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', color: '#2a1e12' },
 });
 
 // ── Stili risultato ───────────────────────────────────────────────────────────
