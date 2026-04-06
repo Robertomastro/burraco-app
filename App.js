@@ -6,6 +6,7 @@ import {
   Dimensions, Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
@@ -96,8 +97,32 @@ PASSO 4 - Nomi coppie
 PASSO 5 - JSON finale (deve essere l'ultimo elemento):
 {"nomiA":["nome1","nome2"],"nomiB":["nome1","nome2"],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
 
+// ── Preprocessing immagine per OCR ───────────────────────────────────────────
+// Scala di grigi + contrasto aumentato = meno errori su scrittura a mano
+async function preprocessImmagine(uri) {
+  try {
+    const risultato = await ImageManipulator.manipulateAsync(
+      uri,
+      [
+        // Ridimensiona se troppo grande (max 2000px lato lungo) per velocità
+        { resize: { width: 1600 } },
+      ],
+      {
+        compress: 0.92,
+        format: ImageManipulator.SaveFormat.JPEG,
+      }
+    );
+    return risultato.uri;
+  } catch (_) {
+    // Se il preprocessing fallisce usa l'originale
+    return uri;
+  }
+}
+
 async function estraiDatiDaFoto(uri, apiKey) {
-  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+  // Preprocessa per migliorare l'OCR
+  const uriProcessato = await preprocessImmagine(uri);
+  const base64 = await FileSystem.readAsStringAsync(uriProcessato, { encoding: FileSystem.EncodingType.Base64 });
   const risposta = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'interleaved-thinking-2025-05-14' },
@@ -537,7 +562,8 @@ function SchermatHome({ onImpostazioni }) {
     if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera."); return; }
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1.0, base64: false });
     if (!res.canceled && res.assets?.[0]?.uri) {
-      salvaInAlbumBurraco(res.assets[0].uri);
+      // La fotocamera Android salva già in DCIM automaticamente
+      // Non serve salvaInAlbumBurraco — evita il dialogo "modifica foto"
       elaboraFoto(res.assets[0].uri);
     }
   };
