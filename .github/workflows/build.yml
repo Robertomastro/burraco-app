@@ -5,6 +5,9 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -32,7 +35,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Genera progetto Android nativo (prebuild)
-        run: node_modules/.bin/expo prebuild --platform android --clean
+        run: node node_modules/expo/bin/cli.js prebuild --platform android --clean
         env:
           EXPO_NO_TELEMETRY: 1
 
@@ -45,7 +48,7 @@ jobs:
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
 
-      - name: Carica APK come artefatto scaricabile
+      - name: Carica APK
         uses: actions/upload-artifact@v4
         with:
           name: burraco-app-${{ github.run_number }}
