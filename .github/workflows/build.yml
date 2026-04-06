@@ -34,8 +34,21 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Verifica path expo CLI
+        run: |
+          echo "Cerco expo CLI..."
+          find node_modules -name "cli.js" -path "*/expo/*" 2>/dev/null | head -5
+          ls node_modules/.bin/ | grep expo || true
+
       - name: Genera progetto Android nativo (prebuild)
-        run: node node_modules/expo/bin/cli.js prebuild --platform android --clean
+        run: |
+          if [ -f "node_modules/@expo/cli/build/bin/cli" ]; then
+            node node_modules/@expo/cli/build/bin/cli prebuild --platform android --clean
+          elif [ -f "node_modules/expo/bin/expo.js" ]; then
+            node node_modules/expo/bin/expo.js prebuild --platform android --clean
+          else
+            npx expo prebuild --platform android --clean
+          fi
         env:
           EXPO_NO_TELEMETRY: 1
 
