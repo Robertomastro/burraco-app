@@ -52,8 +52,10 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
-      - name: Rendi eseguibile gradlew
-        run: chmod +x android/gradlew
+      - name: Rendi eseguibile gradlew e hermesc
+        run: |
+          chmod +x android/gradlew
+          find node_modules/react-native/sdks/hermesc -type f | xargs chmod +x 2>/dev/null || true
 
       - name: Build APK
         working-directory: android
