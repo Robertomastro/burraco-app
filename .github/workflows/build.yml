@@ -31,11 +31,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Installa Expo CLI
-        run: npm install -g @expo/cli
-
       - name: Genera progetto Android nativo (prebuild)
-        run: npx expo prebuild --platform android --clean
+        run: node_modules/.bin/expo prebuild --platform android --clean
         env:
           EXPO_NO_TELEMETRY: 1
 
