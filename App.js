@@ -680,6 +680,7 @@ function SchermatHome({ onImpostazioni }) {
   const [vpB, setVpB] = useState('');
   const [risultato, setRisultato] = useState(null);
   const [foto, setFoto] = useState(null);
+  const [fotoZoom, setFotoZoom] = useState(false);
   const [stato, setStato] = useState('idle'); // idle | analisi | errore
   const [erroreMsg, setErroreMsg] = useState('');
   const [apiKey, setApiKey] = useState(null);
@@ -860,9 +861,6 @@ function SchermatHome({ onImpostazioni }) {
       <View style={[h.dot, pagina === 1 && h.dotOn]} />
     </View>
   );
-
-  // Modal fullscreen zoomabile
-  const [fotoZoom, setFotoZoom] = useState(false);
 
   // Pagina 0: foto
   const paginaFoto = (
