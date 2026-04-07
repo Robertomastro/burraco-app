@@ -34,6 +34,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Ripristina keystore dal secret
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > burraco.keystore
+
       - name: Genera progetto Android nativo (prebuild)
         run: |
           if [ -f "node_modules/@expo/cli/build/bin/cli" ]; then
@@ -50,16 +54,6 @@ jobs:
         run: |
           chmod +x android/gradlew
           find node_modules/react-native/sdks/hermesc -type f | xargs chmod +x 2>/dev/null || true
-
-      - name: Genera keystore
-        run: |
-          keytool -genkeypair \
-            -keystore burraco.keystore \
-            -storepass burraco123 \
-            -alias burraco \
-            -keypass burraco123 \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Burraco,O=Roberto,C=IT"
 
       - name: Configura signing
         run: python3 configure_signing.py
