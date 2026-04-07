@@ -192,16 +192,13 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
   };
   const onFocus = () => {
     if (suggerito !== undefined && suggerito !== null && !isNaN(Number(suggerito))) {
-      // Imposta il suggerimento e poi seleziona tutto dopo che il valore è aggiornato
+      // Imposta il suggerimento — il campo viene interamente sostituito
       onChange(String(Number(suggerito)));
-      setTimeout(() => {
-        inputRef.current?.setNativeProps({ selection: { start: 0, end: 999 } });
-      }, 50);
-    } else {
-      setTimeout(() => {
-        inputRef.current?.setNativeProps({ selection: { start: 0, end: 999 } });
-      }, 10);
     }
+    // Seleziona tutto il testo dopo il render
+    setTimeout(() => {
+      inputRef.current?.setNativeProps({ selection: { start: 0, end: 999 } });
+    }, 30);
   };
   return (
     <View style={g.cellWrap}>
@@ -332,13 +329,15 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
     const bg1 = i % 2 === 0 ? '#fff' : '#fafaf7';
     const bg2 = i % 2 === 0 ? '#f9f6f0' : '#f4f1ea';
 
+    // Totale della mano precedente (base per tutti i calcoli)
+    const prevTotA = i === 0 ? 0 : (Number(datiA[i-1].totale)||0);
+    const prevTotB = i === 0 ? 0 : (Number(datiB[i-1].totale)||0);
+
     // Valore atteso per BASE: totale_scritto - totale_precedente - punti
     const sugBaseA = (Number(datiA[i].totale)||0) - prevTotA - (Number(datiA[i].punti)||0);
     const sugBaseB = (Number(datiB[i].totale)||0) - prevTotB - (Number(datiB[i].punti)||0);
 
     // Valore atteso per PUNTI: totale_scritto - totale_precedente - base
-    const prevTotA = i === 0 ? 0 : (Number(datiA[i-1].totale)||0);
-    const prevTotB = i === 0 ? 0 : (Number(datiB[i-1].totale)||0);
     const sugPuntiA = (Number(datiA[i].totale)||0) - prevTotA - (Number(datiA[i].base)||0);
     const sugPuntiB = (Number(datiB[i].totale)||0) - prevTotB - (Number(datiB[i].base)||0);
 
@@ -818,7 +817,16 @@ function SchermatHome({ onImpostazioni }) {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla galleria."); return; }
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1.0, base64: false });
-    if (!res.canceled && res.assets?.[0]?.uri) elaboraFoto(res.assets[0].uri);
+    if (!res.canceled && res.assets?.[0]?.uri) {
+      // Reset esplicito prima di elaborare — evita che rimangano dati vecchi
+      const vuotoArr = Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
+      setDatiA(vuotoArr); setDatiB(vuotoArr);
+      setTurno(''); setTavolo('');
+      setNomiA(['', '']); setTessereA(['', '']);
+      setNomiB(['', '']); setTessereB(['', '']);
+      setVpA(''); setVpB('');
+      elaboraFoto(res.assets[0].uri);
+    }
   };
 
   const reset = () => {
@@ -874,9 +882,9 @@ function SchermatHome({ onImpostazioni }) {
               </ScrollView>
             </View>
           </Modal>
-          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ flex: 1, backgroundColor: '#000' }} activeOpacity={0.9}>
-            <Image source={{ uri: foto }} style={{ width: SW, flex: 1 }} resizeMode="contain" />
-            <View style={{ position: 'absolute', bottom: 60, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 }}>
+          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ height: SH * 0.38, backgroundColor: '#000' }} activeOpacity={0.9}>
+            <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.38 }} resizeMode="contain" />
+            <View style={{ position: 'absolute', bottom: 6, right: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
               <Text style={{ color: '#fff', fontSize: 11 }}>🔍 Tocca per zoom</Text>
             </View>
           </TouchableOpacity>
