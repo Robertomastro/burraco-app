@@ -17,7 +17,12 @@ const { width: SW, height: SH } = Dimensions.get('window');
 const CHIAVE_STORAGE = 'anthropic_api_key';
 const TABELLE_STORAGE = 'tabelle_vp';
 const TABELLA_ATTIVA_STORAGE = 'tabella_attiva';
+const ATTENDIBILITA_STORAGE = 'attendibilita_ocr';
 const SMAZZATE = 4;
+
+// Soglie confidenza per livello attendibilità
+// basso: mostra sempre | medio: >= 60 | alto: >= 85
+const SOGLIA_ATTENDIBILITA = { basso: 0, medio: 60, alto: 85 };
 
 // ── Tabelle predefinite ───────────────────────────────────────────────────────
 const TABELLA_DEFAULT = {
@@ -88,11 +93,17 @@ Valori possibili: 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55...
 
 [VP] Leggi il numero scritto accanto a "VP" o "Victory Point" per ciascuna coppia.
 
-Cifre spesso confuse nella scrittura a mano: 1/7, 0/6, 3/8, 4/9. Usa il tipo di campo per disambiguare (per BASE e PUNTI usa il vincolo multiplo; per TOTALE e VP leggi esattamente).
+Cifre spesso confuse nella scrittura a mano: 1/7, 0/6, 3/8, 4/9. Usa il tipo di campo per disambiguare.
 Trattino o slash isolato = 0. Numero con "-" prima o dopo = negativo.
 
-Rispondi con SOLO il JSON:
-{"nomiA":["",""],"nomiB":["",""],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
+Per ogni valore numerico assegna un punteggio di confidenza da 0 a 100:
+- 100: cifra chiarissima, nessun dubbio
+- 70-99: abbastanza chiara, scelta quasi certa
+- 40-69: scrittura ambigua, possibile errore
+- 0-39: cifra illeggibile o molto dubbia
+
+Rispondi con SOLO il JSON (i campi *C sono i punteggi confidenza):
+{"nomiA":["",""],"nomiB":["",""],"smazzate":[{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}}],"vpA":0,"vpAC":100,"vpB":0,"vpBC":100}`;
 
 // ── Preprocessing: qualità massima senza ridimensionamento ────────────────────
 async function preprocessImmagine(uri) {
@@ -173,8 +184,10 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
   };
   const onFocus = () => {
     // Quando si entra in modifica, pre-imposta il valore atteso se disponibile
-    if (suggerito !== undefined && suggerito !== null && String(suggerito) !== value) {
-      onChange(String(suggerito));
+    // Gestisce il caso suggerito=0 (valido) e protegge da NaN
+    if (suggerito !== undefined && suggerito !== null && !isNaN(Number(suggerito))) {
+      const sug = String(suggerito);
+      if (sug !== value) onChange(sug);
     }
   };
   return (
@@ -391,6 +404,7 @@ function SchermatImpostazioni({ onTorna }) {
   const [tabelle, setTabelle] = useState(TABELLE_DEFAULT);
   const [tabellaAttivaId, setTabellaAttivaId] = useState('default');
   const [editor, setEditor] = useState(null);
+  const [attendibilita, setAttendibilitaState] = useState('basso');
 
   useEffect(() => {
     (async () => {
@@ -400,9 +414,16 @@ function SchermatImpostazioni({ onTorna }) {
       if (t) { try { setTabelle(JSON.parse(t)); } catch (_) {} } else { setTabelle(TABELLE_DEFAULT); }
       const ta = await SecureStore.getItemAsync(TABELLA_ATTIVA_STORAGE);
       if (ta) setTabellaAttivaId(ta);
+      const att = await SecureStore.getItemAsync(ATTENDIBILITA_STORAGE);
+      if (att) setAttendibilitaState(att);
       setLoading(false);
     })();
   }, []);
+
+  const salvaAttendibilita = async (val) => {
+    setAttendibilitaState(val);
+    await SecureStore.setItemAsync(ATTENDIBILITA_STORAGE, val);
+  };
 
   const salvaApiKey = async () => {
     const p = apiKey.trim();
@@ -472,6 +493,35 @@ function SchermatImpostazioni({ onTorna }) {
         <TouchableOpacity style={[imp.btn, { backgroundColor: '#1a1a2e', marginTop: 14 }]} onPress={() => setEditor('nuova')}>
           <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ Nuova tabella</Text>
         </TouchableOpacity>
+
+        {/* Attendibilità OCR */}
+        <Text style={[imp.sezione, { marginTop: 28 }]}>ATTENDIBILITÀ OCR</Text>
+        <Text style={imp.sub}>
+          Stabilisce quando mostrare i valori letti dall'OCR.{'\n'}
+          Basso: mostra sempre tutti i valori.{'\n'}
+          Medio: nasconde i valori poco certi (sotto 60%).{'\n'}
+          Alto: mostra solo i valori quasi certi (sopra 85%).
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          {['basso', 'medio', 'alto'].map(livello => (
+            <TouchableOpacity
+              key={livello}
+              onPress={() => salvaAttendibilita(livello)}
+              style={[
+                imp.btnAttendibilita,
+                attendibilita === livello && imp.btnAttendibilitaOn,
+              ]}
+            >
+              <Text style={[
+                imp.btnAttendibilitaT,
+                attendibilita === livello && { color: '#d4af37', fontWeight: 'bold' },
+              ]}>
+                {livello.charAt(0).toUpperCase() + livello.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={onTorna}>
           <Text style={{ color: '#7a6a55', fontSize: 14 }}>← Torna all'app</Text>
         </TouchableOpacity>
@@ -495,6 +545,7 @@ function SchermatHome({ onImpostazioni }) {
   const [erroreMsg, setErroreMsg] = useState('');
   const [apiKey, setApiKey] = useState(null);
   const [tabella, setTabella] = useState(TABELLA_DEFAULT);
+  const [attendibilita, setAttendibilita] = useState('basso');
   const [pagina, setPagina] = useState(1); // 0=foto, 1=griglia
   const pagerRef = useRef(null);
 
@@ -506,6 +557,8 @@ function SchermatHome({ onImpostazioni }) {
       const tabs = t ? JSON.parse(t) : TABELLE_DEFAULT;
       const ta = await SecureStore.getItemAsync(TABELLA_ATTIVA_STORAGE) ?? 'default';
       setTabella(tabs.find(x => x.id === ta) ?? TABELLA_DEFAULT);
+      const att = await SecureStore.getItemAsync(ATTENDIBILITA_STORAGE);
+      if (att) setAttendibilita(att);
     };
     carica();
     const timer = setInterval(carica, 2000);
@@ -559,20 +612,34 @@ function SchermatHome({ onImpostazioni }) {
     setStato('analisi');
     setRisultato(null);
     setErroreMsg('');
-    // Vai sulla pagina foto per vedere l'anteprima durante l'analisi
     pagerRef.current?.scrollTo({ x: 0, animated: true });
     setPagina(0);
     try {
       const dati = await estraiDatiDaFoto(uri, apiKey);
-      const toStr = v => String(parseValore(v));
-      const nA = dati.smazzate.map(sm => ({ base: toStr(sm.a.base), punti: toStr(sm.a.punti), totale: toStr(sm.a.totale) }));
-      const nB = dati.smazzate.map(sm => ({ base: toStr(sm.b.base), punti: toStr(sm.b.punti), totale: toStr(sm.b.totale) }));
+      const soglia = SOGLIA_ATTENDIBILITA[attendibilita] ?? 0;
+      // Se la confidenza è sotto la soglia, il campo viene lasciato vuoto
+      const filtra = (val, conf) => {
+        const n = parseValore(val);
+        const c = Number(conf) || 0;
+        if (c < soglia) return ''; // sotto soglia: campo vuoto
+        return String(n);
+      };
+      const nA = dati.smazzate.map(sm => ({
+        base:   filtra(sm.a.base,   sm.a.baseC),
+        punti:  filtra(sm.a.punti,  sm.a.puntiC),
+        totale: filtra(sm.a.totale, sm.a.totaleC),
+      }));
+      const nB = dati.smazzate.map(sm => ({
+        base:   filtra(sm.b.base,   sm.b.baseC),
+        punti:  filtra(sm.b.punti,  sm.b.puntiC),
+        totale: filtra(sm.b.totale, sm.b.totaleC),
+      }));
       setNomiA(dati.nomiA?.length ? dati.nomiA : ['', '']);
       setNomiB(dati.nomiB?.length ? dati.nomiB : ['', '']);
       setDatiA(nA); setDatiB(nB);
-      setVpA(toStr(dati.vpA)); setVpB(toStr(dati.vpB));
+      setVpA(filtra(dati.vpA, dati.vpAC));
+      setVpB(filtra(dati.vpB, dati.vpBC));
       setStato('idle');
-      // Vai alla griglia dopo l'analisi
       setTimeout(() => {
         pagerRef.current?.scrollTo({ x: SW, animated: true });
         setPagina(1);
@@ -792,4 +859,7 @@ const imp = StyleSheet.create({
   td: { fontSize: 13, color: '#3a2e22', textAlign: 'center' },
   inputTh: { borderWidth: 1, borderColor: '#c8b89a', borderRadius: 5, padding: 6, fontSize: 13, textAlign: 'center', color: '#2a1e12', backgroundColor: '#fffdf8' },
   btnAdd: { marginTop: 10, padding: 10, borderWidth: 1, borderColor: '#d4af37', borderRadius: 8, alignItems: 'center', borderStyle: 'dashed' },
+  btnAttendibilita: { flex: 1, borderWidth: 1.5, borderColor: '#c8b89a', borderRadius: 8, padding: 10, alignItems: 'center', backgroundColor: '#fff' },
+  btnAttendibilitaOn: { borderColor: '#1a1a2e', backgroundColor: '#1a1a2e' },
+  btnAttendibilitaT: { fontSize: 13, color: '#7a6a55' },
 });
