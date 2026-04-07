@@ -59,18 +59,9 @@ jobs:
       - name: Configura signing
         run: python3 configure_signing.py
 
-      - name: Bundle JS (debug errori Metro)
-        run: |
-          node node_modules/.bin/react-native bundle \
-            --entry-file index.js \
-            --platform android \
-            --dev false \
-            --bundle-output /tmp/test.bundle \
-            --assets-dest /tmp/assets 2>&1 || true
-
       - name: Build APK release
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon --info 2>&1 | grep -A5 -B5 "error\|Error\|FAILED\|SyntaxError\|Cannot\|Unable" | head -80
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
 
