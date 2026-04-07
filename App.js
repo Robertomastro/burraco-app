@@ -71,37 +71,32 @@ function parseValore(v) {
 }
 
 // ── Prompt OCR con chain-of-thought ──────────────────────────────────────────
-const SYSTEM_PROMPT = `Sei specializzato nel leggere segnapunti di Burraco scritti a mano da persone diverse.
+const SYSTEM_PROMPT = `Leggi questo segnapunti di Burraco scritto a mano. Due colonne: A sinistra, B destra. 4 mani. Ogni mano: BASE, PUNTI, TOTALE. In fondo: VP per A e B.
 
-LAYOUT: due colonne A (sinistra) e B (destra), 4 mani, ciascuna con BASE + PUNTI + TOTALE. In fondo: VP per A e B.
+REGOLA BASE: il valore e' sempre un multiplo di 50. Se vedi qualcosa di ambiguo scegli il multiplo di 50 piu' vicino visivamente. Non usare mai la somma per trovarlo.
+REGOLA PUNTI: il valore e' sempre un multiplo di 5. Se ambiguo scegli il multiplo di 5 piu' vicino visivamente. Non usare mai la somma per trovarlo.
+REGOLA TOTALE: leggi ESATTAMENTE cio' che e' scritto. NON calcolare. NON sommare. Solo leggere.
+REGOLA SEGNO: trattino o slash isolato = 0. Numero con "-" prima o dopo = negativo.
 
-VINCOLI ASSOLUTI (usali per correggere letture dubbie):
-- BASE: multiplo di 50 (0,50,100,150,200,250,300,350,400,450,500,550,600...)
-- PUNTI: multiplo di 5 (0,5,10,15,20,25,30,35,40,45,50...)
-- TOTALE: il numero scritto esattamente, non calcolato
+CIFRE AMBIGUE nella scrittura a mano:
+1 e 7 si confondono (usa il vincolo multiplo per disambiguare)
+0 e 6 si confondono
+3 e 8 si confondono  
+4 e 9 si confondono
+Studia ogni cifra nel contesto della cella.
 
-GRAFIE AMBIGUE COMUNI nella scrittura a mano italiana:
-- "1" con graffe superiori sembra "7" e viceversa -> usa il vincolo multiplo per decidere
-- "0" chiuso sembra "6" o "8" -> guarda le cifre vicine
-- "3" aperto sembra "8" -> il contesto del multiplo aiuta
-- "4" chiuso sembra "9" -> idem
-- "2" veloce sembra "7" -> idem
-- Trattino, slash, lineetta sola = 0
-- Numero seguito o preceduto da "-" = negativo (es: "150-" = -150)
-
-Per ogni cella BASE e PUNTI: scegli il multiplo valido piu' vicino a cio' che vedi.
-Per TOTALE: leggi esattamente.
-
-Rispondi SOLO con il JSON, nessun testo prima o dopo:
+Rispondi SOLO con questo JSON compilato, zero testo aggiuntivo:
 {"nomiA":["",""],"nomiB":["",""],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
 
-// ── Preprocessing immagine per OCR ───────────────────────────────────────────
+// ── Preprocessing: invia originale ad alta qualità senza ridimensionamento ────
 async function preprocessImmagine(uri) {
   try {
+    // Non ridimensioniamo: più pixel = più dettaglio sulla scrittura a mano
+    // Convertiamo solo in JPEG con qualità massima per coerenza
     const risultato = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 1400 } }],
-      { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
+      [], // nessuna trasformazione geometrica
+      { compress: 1.0, format: ImageManipulator.SaveFormat.JPEG }
     );
     return risultato.uri;
   } catch (_) {
@@ -121,11 +116,11 @@ async function estraiDatiDaFoto(uri, apiKey) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+      max_tokens: 500,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Leggi il segnapunti e restituisci solo il JSON.' },
+        { type: 'text', text: 'JSON:' },
       ]}],
     }),
   });
