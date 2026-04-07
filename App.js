@@ -71,75 +71,72 @@ function parseValore(v) {
 }
 
 // ── Prompt OCR con chain-of-thought ──────────────────────────────────────────
-const SYSTEM_PROMPT = `Sei un esperto letturista di segnapunti di Burraco scritti a mano.
+const SYSTEM_PROMPT = `Sei specializzato nel leggere segnapunti di Burraco scritti a mano da persone diverse.
 
-STRUTTURA DEL FOGLIO:
-Il foglio ha DUE COLONNE affiancate: Coppia A (sinistra) e Coppia B (destra).
-Ogni colonna ha 4 blocchi (mani/smazzate), ciascuno con:
-  - BASE (riga superiore del blocco)
-  - PUNTI (riga centrale del blocco)
-  - TOTALE (riga inferiore del blocco, in grassetto o sottolineata)
-In fondo al foglio ci sono i VICTORY POINT: un numero per A e uno per B.
+LAYOUT: due colonne A (sinistra) e B (destra), 4 mani, ciascuna con BASE + PUNTI + TOTALE. In fondo: VP per A e B.
 
-REGOLE DI LETTURA:
-- BASE: multiplo di 50. Se leggi un numero non multiplo di 50, scegli il multiplo di 50 piu' vicino.
-- PUNTI: multiplo di 5. Se leggi un numero non multiplo di 5, scegli il multiplo di 5 piu' vicino.
-- TOTALE: leggi esattamente il numero scritto, senza modificarlo ne' calcolarlo.
-- Trattino (-), slash (/), segno isolato = 0.
-- Numero con segno meno prima o dopo = negativo (es: "150-" = -150).
-- Confusioni frequenti: 1 vs 7, 0 vs 6, 3 vs 8, 4 vs 9. Usa il contesto visivo.
+VINCOLI ASSOLUTI (usali per correggere letture dubbie):
+- BASE: multiplo di 50 (0,50,100,150,200,250,300,350,400,450,500,550,600...)
+- PUNTI: multiplo di 5 (0,5,10,15,20,25,30,35,40,45,50...)
+- TOTALE: il numero scritto esattamente, non calcolato
 
-PROCEDURA - segui questi passi:
-PASSO 1 - Colonna A: scrivi BASE1, PUNTI1, TOTALE1, BASE2, PUNTI2, TOTALE2, BASE3, PUNTI3, TOTALE3, BASE4, PUNTI4, TOTALE4
-PASSO 2 - Colonna B: stessi valori
-PASSO 3 - VPA e VPB
-PASSO 4 - Nomi coppie
-PASSO 5 - JSON finale (deve essere l'ultimo elemento):
-{"nomiA":["nome1","nome2"],"nomiB":["nome1","nome2"],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
+GRAFIE AMBIGUE COMUNI nella scrittura a mano italiana:
+- "1" con graffe superiori sembra "7" e viceversa -> usa il vincolo multiplo per decidere
+- "0" chiuso sembra "6" o "8" -> guarda le cifre vicine
+- "3" aperto sembra "8" -> il contesto del multiplo aiuta
+- "4" chiuso sembra "9" -> idem
+- "2" veloce sembra "7" -> idem
+- Trattino, slash, lineetta sola = 0
+- Numero seguito o preceduto da "-" = negativo (es: "150-" = -150)
+
+Per ogni cella BASE e PUNTI: scegli il multiplo valido piu' vicino a cio' che vedi.
+Per TOTALE: leggi esattamente.
+
+Rispondi SOLO con il JSON, nessun testo prima o dopo:
+{"nomiA":["",""],"nomiB":["",""],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
 
 // ── Preprocessing immagine per OCR ───────────────────────────────────────────
-// Scala di grigi + contrasto aumentato = meno errori su scrittura a mano
 async function preprocessImmagine(uri) {
   try {
     const risultato = await ImageManipulator.manipulateAsync(
       uri,
-      [
-        // Ridimensiona se troppo grande (max 2000px lato lungo) per velocità
-        { resize: { width: 1600 } },
-      ],
-      {
-        compress: 0.92,
-        format: ImageManipulator.SaveFormat.JPEG,
-      }
+      [{ resize: { width: 1400 } }],
+      { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
     );
     return risultato.uri;
   } catch (_) {
-    // Se il preprocessing fallisce usa l'originale
     return uri;
   }
 }
 
 async function estraiDatiDaFoto(uri, apiKey) {
-  // Preprocessa per migliorare l'OCR
   const uriProcessato = await preprocessImmagine(uri);
   const base64 = await FileSystem.readAsStringAsync(uriProcessato, { encoding: FileSystem.EncodingType.Base64 });
   const risposta = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'interleaved-thinking-2025-05-14' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514', max_tokens: 8000, system: SYSTEM_PROMPT,
-      thinking: { type: 'enabled', budget_tokens: 5000 },
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Leggi questo segnapunti di Burraco seguendo la procedura. Restituisci il JSON finale.' },
+        { type: 'text', text: 'Leggi il segnapunti e restituisci solo il JSON.' },
       ]}],
     }),
   });
-  if (!risposta.ok) { const err = await risposta.json().catch(() => ({})); throw new Error(err?.error?.message ?? `Errore API: ${risposta.status}`); }
+  if (!risposta.ok) {
+    const err = await risposta.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `Errore API: ${risposta.status}`);
+  }
   const dati = await risposta.json();
   const testo = dati.content.find(b => b.type === 'text')?.text ?? '';
-  const match = testo.match(/\{[\s\S]*\}(?=[^}]*$)/);
-  if (!match) throw new Error('Nessun JSON trovato nella risposta OCR');
+  const match = testo.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('Risposta OCR non valida');
   return JSON.parse(match[0]);
 }
 
