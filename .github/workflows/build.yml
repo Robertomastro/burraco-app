@@ -61,7 +61,12 @@ jobs:
 
       - name: Build APK release
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon --info 2>&1 | grep -A5 -B5 "error\|Error\|FAILED\|SyntaxError\|Cannot\|Unable" | head -80
+        run: |
+          ./gradlew assembleRelease --no-daemon 2>&1 | tee /tmp/gradle_out.txt || true
+          echo "=== ERRORE METRO ==="
+          grep -A3 "error:" /tmp/gradle_out.txt | head -40 || true
+          grep -A3 "SyntaxError\|TransformError\|Unable to resolve\|Cannot find" /tmp/gradle_out.txt | head -40 || true
+          exit 1
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
 
