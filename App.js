@@ -18,6 +18,7 @@ const CHIAVE_STORAGE = 'anthropic_api_key';
 const TABELLE_STORAGE = 'tabelle_vp';
 const TABELLA_ATTIVA_STORAGE = 'tabella_attiva';
 const ATTENDIBILITA_STORAGE = 'attendibilita_ocr';
+const PASSWORD_STORAGE = 'api_key_password';
 const SMAZZATE = 4;
 
 // Soglie confidenza per livello attendibilità
@@ -184,14 +185,13 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
     if (!isNaN(n) && n !== 0) onChange(String(-n));
   };
   const onFocus = () => {
-    // Applica il suggerimento con setTimeout per non interferire con selectTextOnFocus
+    // Applica il suggerimento: gestisce anche suggerito=0
     if (suggerito !== undefined && suggerito !== null && !isNaN(Number(suggerito))) {
       const sug = String(suggerito);
-      setTimeout(() => {
+      // Usa requestAnimationFrame per applicare dopo che il focus è completato
+      requestAnimationFrame(() => {
         onChange(sug);
-        // Ri-seleziona il testo dopo l'aggiornamento del valore
-        setTimeout(() => inputRef.current?.setNativeProps({ selection: { start: 0, end: sug.length } }), 50);
-      }, 10);
+      });
     }
   };
   return (
@@ -215,6 +215,29 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
         selectTextOnFocus
       />
     </View>
+  );
+}
+
+// ── Campo VP senza pulsante segno ────────────────────────────────────────────
+function CVP({ value, onChange, errore, suggerito, coloreTesto }) {
+  const inputRef = useRef(null);
+  const onFocus = () => {
+    if (suggerito !== undefined && suggerito !== null && !isNaN(Number(suggerito))) {
+      requestAnimationFrame(() => { onChange(String(suggerito)); });
+    }
+  };
+  return (
+    <TextInput
+      ref={inputRef}
+      keyboardType="number-pad"
+      value={value ?? ''}
+      onChangeText={v => onChange(v.replace(/[^0-9]/g, ''))}
+      onFocus={onFocus}
+      style={[g.cellInput, g.cellBold, { color: coloreTesto ?? '#2a1e12' }, errore && g.cellErr]}
+      placeholder="—"
+      placeholderTextColor="#bbb"
+      selectTextOnFocus
+    />
   );
 }
 
@@ -337,13 +360,26 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
         diff < 0  ? '#2c5f2e' : '#2a1e12',
         '#fff')}
       {rigaStatica('DIFF.', diffA, diffB, '#2c5f2e', '#2c5f2e', '#f9f6f0')}
-      {rigaDati('V.P.', vpA, vpB,
-        onChangeVpA, onChangeVpB,
-        ris?.erroriRiepilogo?.vpA, ris?.erroriRiepilogo?.vpB,
-        false, false, true, '#fff',
-        vpCalc ? String(vpCalc.vpA) : null,
-        vpCalc ? String(vpCalc.vpB) : null)}
-      {vpCalc && rigaStatica('V.P.✓', String(vpCalc.vpA), String(vpCalc.vpB), '#2c5f2e', '#7a2230', '#eafaf1')}
+      <View style={[g.riga, { height: ROW_H, backgroundColor: '#fff' }]}>
+        <View style={g.labelCol}><Text style={[g.labelT, { fontWeight: 'bold', color: '#1a1a2e' }]}>V.P.</Text></View>
+        <View style={g.colA}>
+          <CVP value={vpA} onChange={onChangeVpA}
+            errore={ris?.erroriRiepilogo?.vpA}
+            suggerito={vpCalc ? String(vpCalc.vpA) : null}
+            coloreTesto={diff >= 0 ? '#2c5f2e' : '#2a1e12'} />
+        </View>
+        <View style={g.colB}>
+          <CVP value={vpB} onChange={onChangeVpB}
+            errore={ris?.erroriRiepilogo?.vpB}
+            suggerito={vpCalc ? String(vpCalc.vpB) : null}
+            coloreTesto={diff < 0 ? '#2c5f2e' : '#2a1e12'} />
+        </View>
+      </View>
+      {vpCalc && rigaStatica('V.P.✓',
+        String(vpCalc.vpA), String(vpCalc.vpB),
+        diff >= 0 ? '#2c5f2e' : '#2a1e12',
+        diff < 0  ? '#2c5f2e' : '#2a1e12',
+        '#eafaf1')}
     </View>
   );
 }
@@ -416,6 +452,9 @@ function SchermatImpostazioni({ onTorna }) {
   const [attendibilita, setAttendibilitaState] = useState('basso');
   const [apiKeyInModifica, setApiKeyInModifica] = useState(false);
   const [apiKeyConferma, setApiKeyConferma] = useState('');
+  const [apiKeyPassword, setApiKeyPassword] = useState(''); // password scelta durante prima config
+  const [passwordInput, setPasswordInput] = useState(''); // input password per sblocco modifica
+  const [primaConfig, setPrimaConfig] = useState(true); // true se mai configurata
 
   useEffect(() => {
     (async () => {
@@ -427,6 +466,8 @@ function SchermatImpostazioni({ onTorna }) {
       if (ta) setTabellaAttivaId(ta);
       const att = await SecureStore.getItemAsync(ATTENDIBILITA_STORAGE);
       if (att) setAttendibilitaState(att);
+      const pwd = await SecureStore.getItemAsync(PASSWORD_STORAGE);
+      if (pwd) { setApiKeyPassword(pwd); setPrimaConfig(false); }
       setLoading(false);
     })();
   }, []);
@@ -440,21 +481,31 @@ function SchermatImpostazioni({ onTorna }) {
     const p = apiKey.trim();
     if (!p.startsWith('sk-ant-')) { Alert.alert('Chiave non valida', 'Deve iniziare con "sk-ant-".'); return; }
     if (p !== apiKeyConferma.trim()) { Alert.alert('Errore', 'Le due chiavi inserite non coincidono.'); return; }
+    if (primaConfig && !apiKeyPassword.trim()) { Alert.alert('Errore', 'Inserisci una password per proteggere la chiave.'); return; }
     Alert.alert(
-      'Conferma modifica',
-      'Sei sicuro di voler cambiare la API key?',
+      primaConfig ? 'Salva configurazione' : 'Conferma modifica',
+      primaConfig ? 'Confermi di voler salvare la API key con questa password?' : 'Sei sicuro di voler cambiare la API key?',
       [
         { text: 'Annulla', style: 'cancel' },
         { text: 'Sì, salva', onPress: async () => {
           await SecureStore.setItemAsync(CHIAVE_STORAGE, p);
+          if (primaConfig) await SecureStore.setItemAsync(PASSWORD_STORAGE, apiKeyPassword.trim());
           setSalvata(true);
+          setPrimaConfig(false);
           setApiKeyInModifica(false);
-          setApiKey('');
-          setApiKeyConferma('');
-          Alert.alert('Salvata', 'API key aggiornata correttamente.');
+          setApiKey(''); setApiKeyConferma(''); setPasswordInput('');
+          Alert.alert('Salvata', primaConfig ? 'Configurazione completata.' : 'API key aggiornata.');
         }},
       ]
     );
+  };
+  const attivaModifica = () => {
+    if (passwordInput.trim() !== apiKeyPassword) {
+      Alert.alert('Password errata', 'La password inserita non è corretta.');
+      return;
+    }
+    setApiKeyInModifica(true);
+    setApiKey(''); setApiKeyConferma(''); setPasswordInput('');
   };
   const eliminaApiKey = async () => Alert.alert('Elimina chiave', 'Sei sicuro?', [
     { text: 'Annulla', style: 'cancel' },
@@ -481,41 +532,9 @@ function SchermatImpostazioni({ onTorna }) {
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
         <Text style={imp.titolo}>Impostazioni</Text>
 
-        <Text style={imp.sezione}>API KEY ANTHROPIC</Text>
-        <Text style={imp.sub}>Necessaria per l'OCR delle foto. console.anthropic.com</Text>
-        {salvata && !apiKeyInModifica ? (
-          <View>
-            <Text style={imp.ok}>✓ Chiave attiva (nascosta per sicurezza)</Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-              <TouchableOpacity style={[imp.btn, { flex: 2, borderWidth: 1.5, borderColor: '#1a1a2e' }]} onPress={() => { setApiKeyInModifica(true); setApiKey(''); setApiKeyConferma(''); }}>
-                <Text style={{ color: '#1a1a2e', fontWeight: 'bold' }}>✏ Modifica chiave</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[imp.btn, { flex: 1, borderWidth: 1.5, borderColor: '#e74c3c' }]} onPress={eliminaApiKey}>
-                <Text style={{ color: '#e74c3c' }}>Elimina</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          <View>
-            <Text style={[imp.sub, { marginBottom: 4 }]}>Nuova API Key:</Text>
-            <TextInput style={imp.inputNome} value={apiKey} onChangeText={v => { setApiKey(v); }} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
-            <Text style={[imp.sub, { marginTop: 10, marginBottom: 4 }]}>Conferma API Key:</Text>
-            <TextInput style={imp.inputNome} value={apiKeyConferma} onChangeText={setApiKeyConferma} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
-            {apiKey && apiKeyConferma && apiKey !== apiKeyConferma && (
-              <Text style={{ color: '#e74c3c', fontSize: 12, marginTop: 4 }}>Le due chiavi non coincidono</Text>
-            )}
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-              <TouchableOpacity style={[imp.btn, { flex: 2, backgroundColor: '#1a1a2e' }]} onPress={salvaApiKey}>
-                <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>Salva chiave</Text>
-              </TouchableOpacity>
-              {salvata && <TouchableOpacity style={[imp.btn, { flex: 1, borderWidth: 1.5, borderColor: '#c8b89a' }]} onPress={() => { setApiKeyInModifica(false); setApiKey(''); setApiKeyConferma(''); }}>
-                <Text style={{ color: '#7a6a55' }}>Annulla</Text>
-              </TouchableOpacity>}
-            </View>
-          </View>
-        )}
-
-        <Text style={[imp.sezione, { marginTop: 24 }]}>TABELLE VICTORY POINTS</Text>
+        {/* ── 1. Tabelle VP ── */}
+        <Text style={imp.sezione}>TABELLE VICTORY POINTS</Text>
+        <Text style={imp.sub}>Seleziona la tabella per il calcolo dei VP.</Text>
         {tabelle.map(t => (
           <View key={t.id} style={imp.rigaTabella}>
             <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }} onPress={() => salvaTabellaAttiva(t.id)}>
@@ -528,50 +547,88 @@ function SchermatImpostazioni({ onTorna }) {
             </View>
           </View>
         ))}
-
-        <Text style={[imp.sub, { marginTop: 12, marginBottom: 6 }]}>Fasce: {tabAttiva.nome}</Text>
-        <View style={{ flexDirection: 'row', marginBottom: 4 }}>
-          {['Differenza','VP Vin.','VP Per.'].map((h,i) => <Text key={i} style={[imp.th, i===0?{flex:2}:{flex:1}]}>{h}</Text>)}
-        </View>
-        {tabAttiva.righe.map((r, i) => (
-          <View key={i} style={{ flexDirection: 'row', paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: '#f0e8d8', backgroundColor: i%2===0?'#fff':'#fdfaf5' }}>
-            <Text style={[imp.td, { flex: 2 }]}>{r.min} – {r.max === 99999 ? '2505+' : r.max}</Text>
-            <Text style={[imp.td, { flex: 1, color: '#2c5f2e', fontWeight: 'bold' }]}>{r.vpV}</Text>
-            <Text style={[imp.td, { flex: 1, color: '#7a2230', fontWeight: 'bold' }]}>{r.vpP}</Text>
+        <View style={{ marginTop: 12 }}>
+          <View style={{ flexDirection: 'row', marginBottom: 4 }}>
+            {['Differenza','VP Vin.','VP Per.'].map((h,i) => <Text key={i} style={[imp.th, i===0?{flex:2}:{flex:1}]}>{h}</Text>)}
           </View>
-        ))}
-
+          {tabAttiva.righe.map((r, i) => (
+            <View key={i} style={{ flexDirection: 'row', paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: '#f0e8d8', backgroundColor: i%2===0?'#fff':'#fdfaf5' }}>
+              <Text style={[imp.td, { flex: 2 }]}>{r.min} – {r.max === 99999 ? '2505+' : r.max}</Text>
+              <Text style={[imp.td, { flex: 1, color: '#2c5f2e', fontWeight: 'bold' }]}>{r.vpV}</Text>
+              <Text style={[imp.td, { flex: 1, color: '#7a2230', fontWeight: 'bold' }]}>{r.vpP}</Text>
+            </View>
+          ))}
+        </View>
         <TouchableOpacity style={[imp.btn, { backgroundColor: '#1a1a2e', marginTop: 14 }]} onPress={() => setEditor('nuova')}>
           <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ Nuova tabella</Text>
         </TouchableOpacity>
 
-        {/* Attendibilità OCR */}
+        {/* ── 2. Attendibilità OCR ── */}
         <Text style={[imp.sezione, { marginTop: 28 }]}>ATTENDIBILITÀ OCR</Text>
         <Text style={imp.sub}>
-          Stabilisce quando mostrare i valori letti dall'OCR.{'\n'}
           Basso: mostra sempre tutti i valori.{'\n'}
           Medio: nasconde i valori poco certi (sotto 60%).{'\n'}
           Alto: mostra solo i valori quasi certi (sopra 85%).
         </Text>
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
           {['basso', 'medio', 'alto'].map(livello => (
-            <TouchableOpacity
-              key={livello}
-              onPress={() => salvaAttendibilita(livello)}
-              style={[
-                imp.btnAttendibilita,
-                attendibilita === livello && imp.btnAttendibilitaOn,
-              ]}
-            >
-              <Text style={[
-                imp.btnAttendibilitaT,
-                attendibilita === livello && { color: '#d4af37', fontWeight: 'bold' },
-              ]}>
+            <TouchableOpacity key={livello} onPress={() => salvaAttendibilita(livello)}
+              style={[imp.btnAttendibilita, attendibilita === livello && imp.btnAttendibilitaOn]}>
+              <Text style={[imp.btnAttendibilitaT, attendibilita === livello && { color: '#d4af37', fontWeight: 'bold' }]}>
                 {livello.charAt(0).toUpperCase() + livello.slice(1)}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* ── 3. API Key ── */}
+        <Text style={[imp.sezione, { marginTop: 28 }]}>API KEY ANTHROPIC</Text>
+        <Text style={imp.sub}>Necessaria per l'OCR. Ottieni la chiave su console.anthropic.com</Text>
+
+        {primaConfig ? (
+          <View>
+            <Text style={[imp.sub, { marginBottom: 4 }]}>API Key:</Text>
+            <TextInput style={imp.inputNome} value={apiKey} onChangeText={setApiKey} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+            <Text style={[imp.sub, { marginTop: 10, marginBottom: 4 }]}>Conferma API Key:</Text>
+            <TextInput style={imp.inputNome} value={apiKeyConferma} onChangeText={setApiKeyConferma} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+            <Text style={[imp.sub, { marginTop: 10, marginBottom: 4 }]}>Password di protezione:</Text>
+            <TextInput style={imp.inputNome} value={apiKeyPassword} onChangeText={setApiKeyPassword} placeholder="Scegli una password" placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+            <Text style={{ fontSize: 11, color: '#9a8a75', marginTop: 4 }}>Questa password servirà per modificare la chiave in futuro.</Text>
+            {apiKey && apiKeyConferma && apiKey !== apiKeyConferma && (
+              <Text style={{ color: '#e74c3c', fontSize: 12, marginTop: 4 }}>Le due chiavi non coincidono</Text>
+            )}
+            <TouchableOpacity style={[imp.btn, { backgroundColor: '#1a1a2e', marginTop: 12 }]} onPress={salvaApiKey}>
+              <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>Salva configurazione</Text>
+            </TouchableOpacity>
+          </View>
+        ) : salvata && !apiKeyInModifica ? (
+          <View>
+            <Text style={imp.ok}>✓ Chiave attiva (nascosta per sicurezza)</Text>
+            <Text style={[imp.sub, { marginTop: 12, marginBottom: 4 }]}>Inserisci password per modificare:</Text>
+            <TextInput style={imp.inputNome} value={passwordInput} onChangeText={setPasswordInput} placeholder="Password" placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+            <TouchableOpacity style={[imp.btn, { borderWidth: 1.5, borderColor: '#1a1a2e', marginTop: 10 }]} onPress={attivaModifica}>
+              <Text style={{ color: '#1a1a2e', fontWeight: 'bold' }}>✏ Sblocca modifica</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View>
+            <Text style={[imp.sub, { marginBottom: 4 }]}>Nuova API Key:</Text>
+            <TextInput style={imp.inputNome} value={apiKey} onChangeText={setApiKey} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+            <Text style={[imp.sub, { marginTop: 10, marginBottom: 4 }]}>Conferma API Key:</Text>
+            <TextInput style={imp.inputNome} value={apiKeyConferma} onChangeText={setApiKeyConferma} placeholder="sk-ant-..." placeholderTextColor="#9a8a75" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+            {apiKey && apiKeyConferma && apiKey !== apiKeyConferma && (
+              <Text style={{ color: '#e74c3c', fontSize: 12, marginTop: 4 }}>Le due chiavi non coincidono</Text>
+            )}
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+              <TouchableOpacity style={[imp.btn, { flex: 2, backgroundColor: '#1a1a2e' }]} onPress={salvaApiKey}>
+                <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>Salva</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[imp.btn, { flex: 1, borderWidth: 1.5, borderColor: '#c8b89a' }]} onPress={() => { setApiKeyInModifica(false); setApiKey(''); setApiKeyConferma(''); setPasswordInput(''); }}>
+                <Text style={{ color: '#7a6a55' }}>Annulla</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={onTorna}>
           <Text style={{ color: '#7a6a55', fontSize: 14 }}>← Torna all'app</Text>
