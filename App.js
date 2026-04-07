@@ -218,6 +218,7 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
         style={[g.cellInput, errore && g.cellErr, warn && !errore && g.cellWarn, bold && g.cellBold]}
         placeholder="—"
         placeholderTextColor="#bbb"
+        selectTextOnFocus
       />
     </View>
   );
