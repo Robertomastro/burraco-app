@@ -97,6 +97,12 @@ Valori possibili: 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55...
 Cifre spesso confuse nella scrittura a mano: 1/7, 0/6, 3/8, 4/9. Usa il tipo di campo per disambiguare.
 Trattino o slash isolato = 0. Numero con "-" prima o dopo = negativo.
 
+Leggi anche, se presenti:
+- Turno: numero o codice del turno (es. "3", "D4")
+- Tavolo: numero del tavolo (es. "4", "16")
+- Tessera giocatori: codice alfanumerico accanto al nome (es. "MST107", "BSC058")
+- Nomi completi: nome e cognome di ciascun giocatore
+
 Per ogni valore numerico assegna un punteggio di confidenza da 0 a 100:
 - 100: cifra chiarissima, nessun dubbio
 - 70-99: abbastanza chiara, scelta quasi certa
@@ -104,7 +110,7 @@ Per ogni valore numerico assegna un punteggio di confidenza da 0 a 100:
 - 0-39: cifra illeggibile o molto dubbia
 
 Rispondi con SOLO il JSON (i campi *C sono i punteggi confidenza):
-{"nomiA":["",""],"nomiB":["",""],"smazzate":[{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}}],"vpA":0,"vpAC":100,"vpB":0,"vpBC":100}`;
+{"turno":"","tavolo":"","nomiA":["",""],"tessereA":["",""],"nomiB":["",""],"tessereB":["",""],"smazzate":[{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}}],"vpA":0,"vpAC":100,"vpB":0,"vpBC":100}`;
 
 // ── Preprocessing: qualità massima senza ridimensionamento ────────────────────
 async function preprocessImmagine(uri) {
@@ -179,19 +185,14 @@ function validaValori(righe, etichetta) {
 // suggerito: valore atteso calcolato dall'app (pre-impostato all'ingresso in modifica)
 function C({ value, onChange, errore, warn, bold, suggerito }) {
   const isNeg = value?.startsWith('-');
-  const inputRef = useRef(null);
   const toggleSegno = () => {
     const n = parseInt(value, 10);
     if (!isNaN(n) && n !== 0) onChange(String(-n));
   };
+  // Chiama onChange direttamente senza delay — funziona anche con suggerito=0
   const onFocus = () => {
-    // Applica il suggerimento: gestisce anche suggerito=0
     if (suggerito !== undefined && suggerito !== null && !isNaN(Number(suggerito))) {
-      const sug = String(suggerito);
-      // Usa requestAnimationFrame per applicare dopo che il focus è completato
-      requestAnimationFrame(() => {
-        onChange(sug);
-      });
+      onChange(String(Number(suggerito)));
     }
   };
   return (
@@ -200,7 +201,6 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
         <Text style={g.segnoT}>{isNeg ? '−' : '+'}</Text>
       </TouchableOpacity>
       <TextInput
-        ref={inputRef}
         keyboardType="number-pad"
         value={value?.replace('-', '') ?? ''}
         onChangeText={v => {
@@ -212,7 +212,6 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
         style={[g.cellInput, errore && g.cellErr, warn && !errore && g.cellWarn, bold && g.cellBold]}
         placeholder="—"
         placeholderTextColor="#bbb"
-        selectTextOnFocus
       />
     </View>
   );
@@ -220,10 +219,9 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
 
 // ── Campo VP senza pulsante segno ────────────────────────────────────────────
 function CVP({ value, onChange, errore, suggerito, coloreTesto }) {
-  const inputRef = useRef(null);
   const onFocus = () => {
     if (suggerito !== undefined && suggerito !== null && !isNaN(Number(suggerito))) {
-      requestAnimationFrame(() => { onChange(String(suggerito)); });
+      onChange(String(Number(suggerito)));
     }
   };
   return (
@@ -242,7 +240,7 @@ function CVP({ value, onChange, errore, suggerito, coloreTesto }) {
 }
 
 // ── Griglia punteggi compatta ─────────────────────────────────────────────────
-function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, onChangeVpB, risultato, tabella, nomiA, nomiB }) {
+function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, onChangeVpB, risultato, tabella, nomiA, nomiB, tessereA, tessereB, turno, tavolo }) {
   const ris = risultato;
   const totA = Number(datiA[3]?.totale) || 0;
   const totB = Number(datiB[3]?.totale) || 0;
@@ -254,15 +252,35 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
 
   const coloreRiga = (i) => i % 2 === 0 ? '#fff' : '#fafaf7';
 
+  const rigaTurnoTavolo = (turno || tavolo) ? (
+    <View style={[g.riga, { backgroundColor: '#2a2a3e', paddingVertical: 4 }]}>
+      <View style={{ flex: 1, alignItems: 'center' }}>
+        <Text style={{ fontSize: 10, color: '#a0a0c0', letterSpacing: 1 }}>
+          {[turno && `Turno ${turno}`, tavolo && `Tavolo ${tavolo}`].filter(Boolean).join('  ·  ')}
+        </Text>
+      </View>
+    </View>
+  ) : null;
+
   const rigaHeader = (
     <View style={[g.riga, { minHeight: HEADER_H, backgroundColor: '#1a1a2e', paddingVertical: 4 }]}>
       <View style={g.labelCol} />
       <View style={g.colA}>
-        {nomiA.filter(Boolean).map((n, i) => <Text key={i} style={g.headerNome} numberOfLines={1}>{n}</Text>)}
+        {nomiA.filter(Boolean).map((n, i) => (
+          <View key={i} style={{ alignItems: 'center' }}>
+            <Text style={g.headerNome} numberOfLines={1} adjustsFontSizeToFit>{n}</Text>
+            {tessereA?.[i] ? <Text style={g.headerTessera}>{tessereA[i]}</Text> : null}
+          </View>
+        ))}
         {!nomiA.filter(Boolean).length && <Text style={g.headerNome}>A</Text>}
       </View>
       <View style={g.colB}>
-        {nomiB.filter(Boolean).map((n, i) => <Text key={i} style={g.headerNome} numberOfLines={1}>{n}</Text>)}
+        {nomiB.filter(Boolean).map((n, i) => (
+          <View key={i} style={{ alignItems: 'center' }}>
+            <Text style={g.headerNome} numberOfLines={1} adjustsFontSizeToFit>{n}</Text>
+            {tessereB?.[i] ? <Text style={g.headerTessera}>{tessereB[i]}</Text> : null}
+          </View>
+        ))}
         {!nomiB.filter(Boolean).length && <Text style={g.headerNome}>B</Text>}
       </View>
     </View>
@@ -351,6 +369,7 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
 
   return (
     <View style={g.griglia}>
+      {rigaTurnoTavolo}
       {rigaHeader}
       {mani}
       <View style={g.dividerRiepilogo} />
@@ -641,8 +660,12 @@ function SchermatImpostazioni({ onTorna }) {
 // ── App principale ────────────────────────────────────────────────────────────
 function SchermatHome({ onImpostazioni }) {
   const vuoto = () => Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
+  const [turno, setTurno] = useState('');
+  const [tavolo, setTavolo] = useState('');
   const [nomiA, setNomiA] = useState(['', '']);
+  const [tessereA, setTessereA] = useState(['', '']);
   const [nomiB, setNomiB] = useState(['', '']);
+  const [tessereB, setTessereB] = useState(['', '']);
   const [datiA, setDatiA] = useState(vuoto());
   const [datiB, setDatiB] = useState(vuoto());
   const [vpA, setVpA] = useState('');
@@ -724,10 +747,10 @@ function SchermatHome({ onImpostazioni }) {
     const vuotoArr = Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
     setDatiA(vuotoArr);
     setDatiB(vuotoArr);
-    setNomiA(['', '']);
-    setNomiB(['', '']);
-    setVpA('');
-    setVpB('');
+    setTurno(''); setTavolo('');
+    setNomiA(['', '']); setTessereA(['', '']);
+    setNomiB(['', '']); setTessereB(['', '']);
+    setVpA(''); setVpB('');
     pagerRef.current?.scrollTo({ x: 0, animated: true });
     setPagina(0);
     try {
@@ -750,8 +773,12 @@ function SchermatHome({ onImpostazioni }) {
         punti:  filtra(sm.b.punti,  sm.b.puntiC),
         totale: filtra(sm.b.totale, sm.b.totaleC),
       }));
+      setTurno(dati.turno ?? '');
+      setTavolo(dati.tavolo ?? '');
       setNomiA(dati.nomiA?.length ? dati.nomiA : ['', '']);
+      setTessereA(dati.tessereA?.length ? dati.tessereA : ['', '']);
       setNomiB(dati.nomiB?.length ? dati.nomiB : ['', '']);
+      setTessereB(dati.tessereB?.length ? dati.tessereB : ['', '']);
       setDatiA(nA); setDatiB(nB);
       setVpA(filtra(dati.vpA, dati.vpAC));
       setVpB(filtra(dati.vpB, dati.vpBC));
@@ -787,7 +814,10 @@ function SchermatHome({ onImpostazioni }) {
   };
 
   const reset = () => {
-    setDatiA(vuoto()); setDatiB(vuoto()); setNomiA(['', '']); setNomiB(['', '']);
+    setDatiA(vuoto()); setDatiB(vuoto());
+    setTurno(''); setTavolo('');
+    setNomiA(['', '']); setTessereA(['', '']);
+    setNomiB(['', '']); setTessereB(['', '']);
     setVpA(''); setVpB(''); setRisultato(null); setFoto(null); setStato('idle'); setErroreMsg('');
     pagerRef.current?.scrollTo({ x: SW, animated: true }); setPagina(1);
   };
@@ -874,6 +904,8 @@ function SchermatHome({ onImpostazioni }) {
           onChangeVpA={v => setVpA(v)} onChangeVpB={v => setVpB(v)}
           risultato={risultato} tabella={tabella}
           nomiA={nomiA} nomiB={nomiB}
+          tessereA={tessereA} tessereB={tessereB}
+          turno={turno} tavolo={tavolo}
         />
         <PannelloRisultato risultato={risultato} />
       </ScrollView>
@@ -917,6 +949,7 @@ const g = StyleSheet.create({
   colA: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
   colB: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
   headerNome: { fontSize: 11, color: '#d4af37', fontWeight: 'bold', textAlign: 'center', letterSpacing: 0.3 },
+  headerTessera: { fontSize: 9, color: '#a0a0c0', textAlign: 'center', letterSpacing: 0.5 },
   divider: { height: 2, backgroundColor: '#2a2a3e' },
   dividerRiepilogo: { height: 3, backgroundColor: '#1a1a2e' },
   cellWrap: { flexDirection: 'row', alignItems: 'center', gap: 2 },
