@@ -612,6 +612,14 @@ function SchermatHome({ onImpostazioni }) {
     setStato('analisi');
     setRisultato(null);
     setErroreMsg('');
+    // Reset completo dei dati precedenti prima di caricare i nuovi
+    const vuotoArr = Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
+    setDatiA(vuotoArr);
+    setDatiB(vuotoArr);
+    setNomiA(['', '']);
+    setNomiB(['', '']);
+    setVpA('');
+    setVpB('');
     pagerRef.current?.scrollTo({ x: 0, animated: true });
     setPagina(0);
     try {
