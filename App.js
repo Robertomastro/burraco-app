@@ -194,6 +194,7 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
         style={[g.cellInput, errore && g.cellErr, warn && !errore && g.cellWarn, bold && g.cellBold]}
         placeholder="—"
         placeholderTextColor="#bbb"
+        selectTextOnFocus
       />
     </View>
   );
@@ -317,7 +318,9 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
       {rigaDati('V.P.', vpA, vpB,
         onChangeVpA, onChangeVpB,
         ris?.erroriRiepilogo?.vpA, ris?.erroriRiepilogo?.vpB,
-        false, false, true, '#fff')}
+        false, false, true, '#fff',
+        vpCalc ? String(vpCalc.vpA) : null,
+        vpCalc ? String(vpCalc.vpB) : null)}
       {vpCalc && rigaStatica('V.P.✓', String(vpCalc.vpA), String(vpCalc.vpB), '#2c5f2e', '#7a2230', '#eafaf1')}
     </View>
   );
