@@ -226,7 +226,6 @@ function CVP({ value, onChange, errore, suggerito, coloreTesto }) {
   };
   return (
     <TextInput
-      ref={inputRef}
       keyboardType="number-pad"
       value={value ?? ''}
       onChangeText={v => onChange(v.replace(/[^0-9]/g, ''))}
