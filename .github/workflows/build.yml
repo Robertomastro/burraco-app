@@ -34,12 +34,6 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Verifica path expo CLI
-        run: |
-          echo "Cerco expo CLI..."
-          find node_modules -name "cli.js" -path "*/expo/*" 2>/dev/null | head -5
-          ls node_modules/.bin/ | grep expo || true
-
       - name: Genera progetto Android nativo (prebuild)
         run: |
           if [ -f "node_modules/@expo/cli/build/bin/cli" ]; then
@@ -57,18 +51,31 @@ jobs:
           chmod +x android/gradlew
           find node_modules/react-native/sdks/hermesc -type f | xargs chmod +x 2>/dev/null || true
 
-      - name: Build APK
+      - name: Genera debug keystore per firma
+        run: |
+          keytool -genkeypair \
+            -keystore android/app/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Burraco, OU=App, O=Roberto, L=Roma, ST=Lazio, C=IT"
+
+      - name: Build APK firmata
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        run: |
+          ./gradlew assembleDebug --no-daemon
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
 
       - name: Trova APK
         run: find android/app/build/outputs -name "*.apk" 2>/dev/null
 
-      - name: Carica APK
+      - name: Carica APK installabile
         uses: actions/upload-artifact@v4
         with:
           name: burraco-app-${{ github.run_number }}
-          path: android/app/build/outputs/apk/**/*.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
