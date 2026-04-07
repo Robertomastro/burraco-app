@@ -71,31 +71,35 @@ function parseValore(v) {
 }
 
 // ── Prompt OCR con chain-of-thought ──────────────────────────────────────────
-const SYSTEM_PROMPT = `Leggi questo segnapunti di Burraco scritto a mano. Due colonne: A sinistra, B destra. 4 mani. Ogni mano: BASE, PUNTI, TOTALE. In fondo: VP per A e B.
+const SYSTEM_PROMPT = `Leggi un segnapunti di Burraco scritto a mano. Due colonne A e B, 4 mani, ciascuna con BASE + PUNTI + TOTALE. In fondo VP per A e B.
 
-REGOLA BASE: il valore e' sempre un multiplo di 50. Se vedi qualcosa di ambiguo scegli il multiplo di 50 piu' vicino visivamente. Non usare mai la somma per trovarlo.
-REGOLA PUNTI: il valore e' sempre un multiplo di 5. Se ambiguo scegli il multiplo di 5 piu' vicino visivamente. Non usare mai la somma per trovarlo.
-REGOLA TOTALE: leggi ESATTAMENTE cio' che e' scritto. NON calcolare. NON sommare. Solo leggere.
-REGOLA SEGNO: trattino o slash isolato = 0. Numero con "-" prima o dopo = negativo.
+ISTRUZIONI SEPARATE PER OGNI TIPO DI CAMPO:
 
-CIFRE AMBIGUE nella scrittura a mano:
-1 e 7 si confondono (usa il vincolo multiplo per disambiguare)
-0 e 6 si confondono
-3 e 8 si confondono  
-4 e 9 si confondono
-Studia ogni cifra nel contesto della cella.
+[BASE] Multiplo di 50. Leggi la cifra e arrotonda al multiplo di 50 piu' visivamente simile. Non fare mai somme.
+Valori possibili: 0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500...
 
-Rispondi SOLO con questo JSON compilato, zero testo aggiuntivo:
+[PUNTI] Multiplo di 5. Leggi la cifra e arrotonda al multiplo di 5 piu' visivamente simile. Non fare mai somme.
+Valori possibili: 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55...
+
+[TOTALE] *** ATTENZIONE: leggi SOLO il numero fisicamente scritto nella cella TOTALE. ***
+*** NON sommare BASE + PUNTI + totale precedente. ***
+*** NON verificare se il totale e' matematicamente corretto. ***
+*** Se e' scritto 345, scrivi 345. Se e' scritto 1150, scrivi 1150. ***
+
+[VP] Leggi il numero scritto accanto a "VP" o "Victory Point" per ciascuna coppia.
+
+Cifre spesso confuse nella scrittura a mano: 1/7, 0/6, 3/8, 4/9. Usa il tipo di campo per disambiguare (per BASE e PUNTI usa il vincolo multiplo; per TOTALE e VP leggi esattamente).
+Trattino o slash isolato = 0. Numero con "-" prima o dopo = negativo.
+
+Rispondi con SOLO il JSON:
 {"nomiA":["",""],"nomiB":["",""],"smazzate":[{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}},{"a":{"base":0,"punti":0,"totale":0},"b":{"base":0,"punti":0,"totale":0}}],"vpA":0,"vpB":0}`;
 
-// ── Preprocessing: invia originale ad alta qualità senza ridimensionamento ────
+// ── Preprocessing: qualità massima senza ridimensionamento ────────────────────
 async function preprocessImmagine(uri) {
   try {
-    // Non ridimensioniamo: più pixel = più dettaglio sulla scrittura a mano
-    // Convertiamo solo in JPEG con qualità massima per coerenza
     const risultato = await ImageManipulator.manipulateAsync(
       uri,
-      [], // nessuna trasformazione geometrica
+      [],
       { compress: 1.0, format: ImageManipulator.SaveFormat.JPEG }
     );
     return risultato.uri;
@@ -159,12 +163,19 @@ function validaValori(righe, etichetta) {
   return errori;
 }
 
-// ── Campo compatto con +/- colorato ──────────────────────────────────────────
-function C({ value, onChange, errore, warn, bold }) {
+// ── Campo compatto con +/- colorato e suggerimento al focus ──────────────────
+// suggerito: valore atteso calcolato dall'app (pre-impostato all'ingresso in modifica)
+function C({ value, onChange, errore, warn, bold, suggerito }) {
   const isNeg = value?.startsWith('-');
   const toggleSegno = () => {
     const n = parseInt(value, 10);
     if (!isNaN(n) && n !== 0) onChange(String(-n));
+  };
+  const onFocus = () => {
+    // Quando si entra in modifica, pre-imposta il valore atteso se disponibile
+    if (suggerito !== undefined && suggerito !== null && String(suggerito) !== value) {
+      onChange(String(suggerito));
+    }
   };
   return (
     <View style={g.cellWrap}>
@@ -179,10 +190,10 @@ function C({ value, onChange, errore, warn, bold }) {
           const neg = value?.startsWith('-');
           onChange(cifre === '' ? '' : (neg ? '-' + cifre : cifre));
         }}
+        onFocus={onFocus}
         style={[g.cellInput, errore && g.cellErr, warn && !errore && g.cellWarn, bold && g.cellBold]}
         placeholder="—"
         placeholderTextColor="#bbb"
-        selectTextOnFocus
       />
     </View>
   );
@@ -221,11 +232,18 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
     </View>
   );
 
-  const rigaDati = (label, valA, valB, onA, onB, errA, errB, warnA, warnB, isBold, bgColor) => (
+  // Calcola il totale cumulativo atteso fino alla mano i (usando i valori scritti)
+  const totPrec = (righe, i) => {
+    let t = 0;
+    for (let j = 0; j < i; j++) t += (Number(righe[j].base)||0) + (Number(righe[j].punti)||0);
+    return t;
+  };
+
+  const rigaDati = (label, valA, valB, onA, onB, errA, errB, warnA, warnB, isBold, bgColor, sugA, sugB) => (
     <View style={[g.riga, { height: ROW_H, backgroundColor: bgColor }]}>
       <View style={g.labelCol}><Text style={[g.labelT, isBold && { fontWeight: 'bold', color: '#1a1a2e' }]}>{label}</Text></View>
-      <View style={g.colA}><C value={valA} onChange={onA} errore={errA} warn={warnA} bold={isBold} /></View>
-      <View style={g.colB}><C value={valB} onChange={onB} errore={errB} warn={warnB} bold={isBold} /></View>
+      <View style={g.colA}><C value={valA} onChange={onA} errore={errA} warn={warnA} bold={isBold} suggerito={sugA} /></View>
+      <View style={g.colB}><C value={valB} onChange={onB} errore={errB} warn={warnB} bold={isBold} suggerito={sugB} /></View>
     </View>
   );
 
@@ -245,7 +263,21 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
     const wB = ris?.warnB ?? [];
     const bg1 = i % 2 === 0 ? '#fff' : '#fafaf7';
     const bg2 = i % 2 === 0 ? '#f9f6f0' : '#f4f1ea';
-    // Sottile separatore tra mani (tranne prima)
+
+    // Valore atteso per BASE: totale_scritto - totale_precedente - punti
+    const sugBaseA = (Number(datiA[i].totale)||0) - prevTotA - (Number(datiA[i].punti)||0);
+    const sugBaseB = (Number(datiB[i].totale)||0) - prevTotB - (Number(datiB[i].punti)||0);
+
+    // Valore atteso per PUNTI: totale_scritto - totale_precedente - base
+    const prevTotA = i === 0 ? 0 : (Number(datiA[i-1].totale)||0);
+    const prevTotB = i === 0 ? 0 : (Number(datiB[i-1].totale)||0);
+    const sugPuntiA = (Number(datiA[i].totale)||0) - prevTotA - (Number(datiA[i].base)||0);
+    const sugPuntiB = (Number(datiB[i].totale)||0) - prevTotB - (Number(datiB[i].base)||0);
+
+    // Valore atteso per TOTALE: totale_precedente + base + punti
+    const sugTotA = prevTotA + (Number(datiA[i].base)||0) + (Number(datiA[i].punti)||0);
+    const sugTotB = prevTotB + (Number(datiB[i].base)||0) + (Number(datiB[i].punti)||0);
+
     if (i > 0) mani.push(<View key={`div${i}`} style={g.divider} />);
     mani.push(
       <View key={`m${i}`}>
@@ -255,18 +287,18 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
           false, false,
           wA.some(w => w.smazzata === i+1 && w.tipo === 'BASE'),
           wB.some(w => w.smazzata === i+1 && w.tipo === 'BASE'),
-          false, bg1)}
+          false, bg1, sugBaseA, sugBaseB)}
         {rigaDati('PUNTI',
           datiA[i].punti, datiB[i].punti,
           v => onChangeA(i, 'punti', v), v => onChangeB(i, 'punti', v),
           false, false,
           wA.some(w => w.smazzata === i+1 && w.tipo === 'PUNTI'),
           wB.some(w => w.smazzata === i+1 && w.tipo === 'PUNTI'),
-          false, bg1)}
+          false, bg1, sugPuntiA, sugPuntiB)}
         {rigaDati('TOT',
           datiA[i].totale, datiB[i].totale,
           v => onChangeA(i, 'totale', v), v => onChangeB(i, 'totale', v),
-          errA, errB, false, false, true, bg2)}
+          errA, errB, false, false, true, bg2, sugTotA, sugTotB)}
       </View>
     );
   }
