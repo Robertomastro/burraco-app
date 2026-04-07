@@ -51,35 +51,71 @@ jobs:
           chmod +x android/gradlew
           find node_modules/react-native/sdks/hermesc -type f | xargs chmod +x 2>/dev/null || true
 
-      - name: Genera keystore per firma release
+      - name: Genera keystore
         run: |
           keytool -genkeypair \
-            -keystore burraco-release.keystore \
+            -keystore burraco.keystore \
             -storepass burraco123 \
-            -alias burraco-key \
+            -alias burraco \
             -keypass burraco123 \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
+            -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Burraco,O=Roberto,C=IT"
 
-      - name: Configura firma in gradle.properties
+      - name: Configura signing con Python
         run: |
-          cat >> android/gradle.properties << 'PROPS'
-          MYAPP_UPLOAD_STORE_FILE=../../burraco-release.keystore
-          MYAPP_UPLOAD_KEY_ALIAS=burraco-key
-          MYAPP_UPLOAD_STORE_PASSWORD=burraco123
-          MYAPP_UPLOAD_KEY_PASSWORD=burraco123
-          PROPS
+          python3 << 'PYEOF'
+          import re, os
 
-      - name: Configura signing config in build.gradle
-        run: |
-          # Aggiunge signingConfigs release all'app build.gradle
-          sed -i 's/signingConfigs {/signingConfigs {\n        release {\n            storeFile file(MYAPP_UPLOAD_STORE_FILE)\n            storePassword MYAPP_UPLOAD_STORE_PASSWORD\n            keyAlias MYAPP_UPLOAD_KEY_ALIAS\n            keyPassword MYAPP_UPLOAD_KEY_PASSWORD\n        }/' android/app/build.gradle
-          # Usa la signing config release nella build release
-          sed -i 's/buildTypes {/buildTypes {\n        release {\n            signingConfig signingConfigs.release\n        }/' android/app/build.gradle
+          # Scrivi keystore.properties
+          with open('android/keystore.properties', 'w') as f:
+              f.write('storeFile=../../burraco.keystore\n')
+              f.write('storePassword=burraco123\n')
+              f.write('keyAlias=burraco\n')
+              f.write('keyPassword=burraco123\n')
 
-      - name: Build APK release firmata
+          # Leggi build.gradle
+          with open('android/app/build.gradle', 'r') as f:
+              content = f.read()
+
+          # Aggiungi lettura keystore.properties prima di android {
+          props_block = '''
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file('keystore.properties')
+if (keystoreFile.exists()) { keystoreProps.load(new FileInputStream(keystoreFile)) }
+
+'''
+          if 'keystoreProps' not in content:
+              content = props_block + content
+
+          # Aggiungi signingConfigs dentro android { prima di buildTypes
+          signing_config = '''
+      signingConfigs {
+          release {
+              storeFile keystoreProps['storeFile'] ? file(keystoreProps['storeFile']) : null
+              storePassword keystoreProps['storePassword']
+              keyAlias keystoreProps['keyAlias']
+              keyPassword keystoreProps['keyPassword']
+          }
+      }
+'''
+          if 'signingConfigs' not in content:
+              content = content.replace('    buildTypes {', signing_config + '    buildTypes {')
+
+          # Aggiungi signingConfig alla release buildType
+          if 'signingConfig signingConfigs.release' not in content:
+              content = re.sub(
+                  r'(buildTypes\s*\{[^}]*release\s*\{)',
+                  r'\1\n                signingConfig signingConfigs.release',
+                  content, flags=re.DOTALL
+              )
+
+          with open('android/app/build.gradle', 'w') as f:
+              f.write(content)
+
+          print("build.gradle aggiornato OK")
+          PYEOF
+
+      - name: Build APK release
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
         env:
