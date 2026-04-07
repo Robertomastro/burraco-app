@@ -802,17 +802,6 @@ function SchermatHome({ onImpostazioni }) {
     }
   };
 
-  const salvaInAlbumBurraco = async (uri) => {
-    try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status !== 'granted') return;
-      const asset = await MediaLibrary.createAssetAsync(uri);
-      let album = await MediaLibrary.getAlbumAsync('Burraco');
-      if (!album) await MediaLibrary.createAlbumAsync('Burraco', asset, false);
-      else await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
-    } catch (_) {}
-  };
-
   const scattaFoto = async () => {
     if (!controllaApiKey()) return;
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
