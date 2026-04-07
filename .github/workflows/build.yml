@@ -51,28 +51,46 @@ jobs:
           chmod +x android/gradlew
           find node_modules/react-native/sdks/hermesc -type f | xargs chmod +x 2>/dev/null || true
 
-      - name: Crea debug keystore fresco
+      - name: Genera keystore per firma release
         run: |
-          rm -f android/app/debug.keystore
           keytool -genkeypair \
-            -keystore android/app/debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
+            -keystore burraco-release.keystore \
+            -storepass burraco123 \
+            -alias burraco-key \
+            -keypass burraco123 \
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+            -dname "CN=Burraco,O=Roberto,C=IT"
 
-      - name: Build APK debug
+      - name: Configura firma in gradle.properties
+        run: |
+          cat >> android/gradle.properties << 'PROPS'
+          MYAPP_UPLOAD_STORE_FILE=../../burraco-release.keystore
+          MYAPP_UPLOAD_KEY_ALIAS=burraco-key
+          MYAPP_UPLOAD_STORE_PASSWORD=burraco123
+          MYAPP_UPLOAD_KEY_PASSWORD=burraco123
+          PROPS
+
+      - name: Configura signing config in build.gradle
+        run: |
+          # Aggiunge signingConfigs release all'app build.gradle
+          sed -i 's/signingConfigs {/signingConfigs {\n        release {\n            storeFile file(MYAPP_UPLOAD_STORE_FILE)\n            storePassword MYAPP_UPLOAD_STORE_PASSWORD\n            keyAlias MYAPP_UPLOAD_KEY_ALIAS\n            keyPassword MYAPP_UPLOAD_KEY_PASSWORD\n        }/' android/app/build.gradle
+          # Usa la signing config release nella build release
+          sed -i 's/buildTypes {/buildTypes {\n        release {\n            signingConfig signingConfigs.release\n        }/' android/app/build.gradle
+
+      - name: Build APK release firmata
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleRelease --no-daemon
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
 
-      - name: Carica APK installabile
+      - name: Trova APK
+        run: find android/app/build/outputs -name "*.apk"
+
+      - name: Carica APK
         uses: actions/upload-artifact@v4
         with:
           name: burraco-app-${{ github.run_number }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
