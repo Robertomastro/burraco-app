@@ -184,15 +184,23 @@ function validaValori(righe, etichetta) {
 // ── Campo compatto con +/- colorato e suggerimento al focus ──────────────────
 // suggerito: valore atteso calcolato dall'app (pre-impostato all'ingresso in modifica)
 function C({ value, onChange, errore, warn, bold, suggerito }) {
+  const inputRef = useRef(null);
   const isNeg = value?.startsWith('-');
   const toggleSegno = () => {
     const n = parseInt(value, 10);
     if (!isNaN(n) && n !== 0) onChange(String(-n));
   };
-  // Chiama onChange direttamente senza delay — funziona anche con suggerito=0
   const onFocus = () => {
     if (suggerito !== undefined && suggerito !== null && !isNaN(Number(suggerito))) {
+      // Imposta il suggerimento e poi seleziona tutto dopo che il valore è aggiornato
       onChange(String(Number(suggerito)));
+      setTimeout(() => {
+        inputRef.current?.setNativeProps({ selection: { start: 0, end: 999 } });
+      }, 50);
+    } else {
+      setTimeout(() => {
+        inputRef.current?.setNativeProps({ selection: { start: 0, end: 999 } });
+      }, 10);
     }
   };
   return (
@@ -201,6 +209,7 @@ function C({ value, onChange, errore, warn, bold, suggerito }) {
         <Text style={g.segnoT}>{isNeg ? '−' : '+'}</Text>
       </TouchableOpacity>
       <TextInput
+        ref={inputRef}
         keyboardType="number-pad"
         value={value?.replace('-', '') ?? ''}
         onChangeText={v => {
@@ -252,9 +261,9 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
   const coloreRiga = (i) => i % 2 === 0 ? '#fff' : '#fafaf7';
 
   const rigaTurnoTavolo = (turno || tavolo) ? (
-    <View style={[g.riga, { backgroundColor: '#2a2a3e', paddingVertical: 4 }]}>
+    <View style={[g.riga, { backgroundColor: '#2a2a3e', paddingVertical: 5 }]}>
       <View style={{ flex: 1, alignItems: 'center' }}>
-        <Text style={{ fontSize: 10, color: '#a0a0c0', letterSpacing: 1 }}>
+        <Text style={{ fontSize: 13, color: '#ffffff', letterSpacing: 1, fontWeight: 'bold' }}>
           {[turno && `Turno ${turno}`, tavolo && `Tavolo ${tavolo}`].filter(Boolean).join('  ·  ')}
         </Text>
       </View>
@@ -792,14 +801,24 @@ function SchermatHome({ onImpostazioni }) {
     }
   };
 
+  const salvaInAlbumBurraco = async (uri) => {
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') return;
+      const asset = await MediaLibrary.createAssetAsync(uri);
+      let album = await MediaLibrary.getAlbumAsync('Burraco');
+      if (!album) await MediaLibrary.createAlbumAsync('Burraco', asset, false);
+      else await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+    } catch (_) {}
+  };
+
   const scattaFoto = async () => {
     if (!controllaApiKey()) return;
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera."); return; }
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1.0, base64: false });
     if (!res.canceled && res.assets?.[0]?.uri) {
-      // La fotocamera Android salva già in DCIM automaticamente
-      // Non serve salvaInAlbumBurraco — evita il dialogo "modifica foto"
+      salvaInAlbumBurraco(res.assets[0].uri);
       elaboraFoto(res.assets[0].uri);
     }
   };
@@ -842,6 +861,9 @@ function SchermatHome({ onImpostazioni }) {
     </View>
   );
 
+  // Modal fullscreen zoomabile
+  const [fotoZoom, setFotoZoom] = useState(false);
+
   // Pagina 0: foto
   const paginaFoto = (
     <View style={{ width: SW, flex: 1 }}>
@@ -851,17 +873,32 @@ function SchermatHome({ onImpostazioni }) {
           <Text style={{ color: '#d4af37', marginTop: 12, fontSize: 14 }}>Analisi in corso…</Text>
         </View>
       ) : foto ? (
-        <ScrollView
-          style={{ flex: 1, backgroundColor: '#000' }}
-          contentContainerStyle={{ flex: 1 }}
-          maximumZoomScale={5}
-          minimumZoomScale={1}
-          centerContent
-          showsHorizontalScrollIndicator={false}
-          showsVerticalScrollIndicator={false}
-        >
-          <Image source={{ uri: foto }} style={{ width: SW, flex: 1 }} resizeMode="contain" />
-        </ScrollView>
+        <>
+          <Modal visible={fotoZoom} transparent={false} animationType="fade" statusBarTranslucent>
+            <View style={{ flex: 1, backgroundColor: '#000' }}>
+              <TouchableOpacity onPress={() => setFotoZoom(false)}
+                style={{ position: 'absolute', top: 48, right: 16, zIndex: 10, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+              </TouchableOpacity>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+                maximumZoomScale={5} minimumZoomScale={1} centerContent
+                showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
+                <Image source={{ uri: foto }} style={{ width: SW, height: SH }} resizeMode="contain" />
+              </ScrollView>
+            </View>
+          </Modal>
+          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ flex: 1, backgroundColor: '#000' }} activeOpacity={0.9}>
+            <Image source={{ uri: foto }} style={{ width: SW, flex: 1 }} resizeMode="contain" />
+            <View style={{ position: 'absolute', bottom: 60, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 }}>
+              <Text style={{ color: '#fff', fontSize: 11 }}>🔍 Tocca per zoom</Text>
+            </View>
+          </TouchableOpacity>
+          <View style={h.fotoBar}>
+            <TouchableOpacity style={h.btnFotoBar} onPress={scattaFoto}><Text style={h.btnFotoBarT}>📷 Nuova</Text></TouchableOpacity>
+            <TouchableOpacity style={h.btnFotoBar} onPress={caricaDaLibreria}><Text style={h.btnFotoBarT}>🖼 Libreria</Text></TouchableOpacity>
+            <TouchableOpacity style={[h.btnFotoBar, { borderColor: '#7a6a55' }]} onPress={reset}><Text style={[h.btnFotoBarT, { color: '#7a6a55' }]}>↺ Reset</Text></TouchableOpacity>
+          </View>
+        </>
       ) : (
         <View style={{ flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
           <TouchableOpacity style={h.btnScanGrande} onPress={scattaFoto}>
@@ -873,13 +910,6 @@ function SchermatHome({ onImpostazioni }) {
             <Text style={{ color: '#d4af37', fontSize: 16, fontWeight: 'bold', marginTop: 8 }}>Libreria</Text>
           </TouchableOpacity>
           {stato === 'errore' && <Text style={{ color: '#e74c3c', textAlign: 'center', paddingHorizontal: 24, fontSize: 13 }}>⚠ {erroreMsg}</Text>}
-        </View>
-      )}
-      {foto && stato !== 'analisi' && (
-        <View style={h.fotoBar}>
-          <TouchableOpacity style={h.btnFotoBar} onPress={scattaFoto}><Text style={h.btnFotoBarT}>📷 Nuova</Text></TouchableOpacity>
-          <TouchableOpacity style={h.btnFotoBar} onPress={caricaDaLibreria}><Text style={h.btnFotoBarT}>🖼 Libreria</Text></TouchableOpacity>
-          <TouchableOpacity style={[h.btnFotoBar, { borderColor: '#7a6a55' }]} onPress={reset}><Text style={[h.btnFotoBarT, { color: '#7a6a55' }]}>↺ Reset</Text></TouchableOpacity>
         </View>
       )}
     </View>
@@ -948,7 +978,7 @@ const g = StyleSheet.create({
   colA: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
   colB: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
   headerNome: { fontSize: 11, color: '#d4af37', fontWeight: 'bold', textAlign: 'center', letterSpacing: 0.3 },
-  headerTessera: { fontSize: 9, color: '#a0a0c0', textAlign: 'center', letterSpacing: 0.5 },
+  headerTessera: { fontSize: 11, color: '#ffffff', textAlign: 'center', letterSpacing: 0.5, fontWeight: 'bold' },
   divider: { height: 2, backgroundColor: '#2a2a3e' },
   dividerRiepilogo: { height: 3, backgroundColor: '#1a1a2e' },
   cellWrap: { flexDirection: 'row', alignItems: 'center', gap: 2 },
