@@ -36,7 +36,8 @@ jobs:
 
       - name: Ripristina keystore dal secret
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > burraco.keystore
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '\n\r ' | base64 --decode > burraco.keystore
+          ls -la burraco.keystore
 
       - name: Genera progetto Android nativo (prebuild)
         run: |
