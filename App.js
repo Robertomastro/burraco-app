@@ -10,6 +10,8 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
+import { captureRef } from 'react-native-view-shot';
 import { StatusBar } from 'expo-status-bar';
 
 const { width: SW, height: SH } = Dimensions.get('window');
@@ -264,7 +266,7 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
   const rigaTurnoTavolo = (
     <View style={[g.riga, { backgroundColor: '#2a2a3e', paddingVertical: 3 }]}>
       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-        <Text style={{ fontSize: 11, color: '#a0a0c0', fontWeight: 'bold' }}>T.</Text>
+        <Text style={{ fontSize: 10, color: '#a0a0c0', fontWeight: 'bold' }}>Turno</Text>
         <TextInput
           value={turno}
           onChangeText={onChangeTurno}
@@ -272,7 +274,7 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
           placeholder="—" placeholderTextColor="#666"
           selectTextOnFocus
         />
-        <Text style={{ fontSize: 11, color: '#a0a0c0', fontWeight: 'bold', marginLeft: 8 }}>Tav.</Text>
+        <Text style={{ fontSize: 10, color: '#a0a0c0', fontWeight: 'bold', marginLeft: 8 }}>Tavolo</Text>
         <TextInput
           value={tavolo}
           onChangeText={onChangeTavolo}
@@ -294,7 +296,7 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
               style={g.headerInput} placeholder={`Gioc.${i+1}`} placeholderTextColor="#666"
               selectTextOnFocus />
             <TextInput value={tessereA[i] ?? ''} onChangeText={v => updArr(onChangeTessereA, i, v)}
-              style={g.headerInputTessera} placeholder="tessera" placeholderTextColor="#555"
+              style={g.headerInputTessera} placeholder="tessera" placeholderTextColor="#aaa"
               selectTextOnFocus />
           </View>
         ))}
@@ -306,7 +308,7 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
               style={g.headerInput} placeholder={`Gioc.${i+1}`} placeholderTextColor="#666"
               selectTextOnFocus />
             <TextInput value={tessereB[i] ?? ''} onChangeText={v => updArr(onChangeTessereB, i, v)}
-              style={g.headerInputTessera} placeholder="tessera" placeholderTextColor="#555"
+              style={g.headerInputTessera} placeholder="tessera" placeholderTextColor="#aaa"
               selectTextOnFocus />
           </View>
         ))}
@@ -437,12 +439,30 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
 }
 
 // ── Pannello risultato compatto ───────────────────────────────────────────────
-function PannelloRisultato({ risultato }) {
-  if (!risultato) return null;
+function PannelloRisultato({ risultato, grigliaDaCondividere }) {
+  const condividi = async () => {
+    try {
+      const uri = await captureRef(grigliaDaCondividere, { format: 'png', quality: 1.0 });
+      await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Condividi punteggi' });
+    } catch (e) {
+      Alert.alert('Errore', 'Impossibile condividere lo screenshot.');
+    }
+  };
+
+  // Sempre visibile: mostra "Tutto corretto" con pulsante condividi, oppure gli errori
+  if (!risultato) return (
+    <View style={[r.box, { backgroundColor: '#f5f5f5', borderColor: '#ddd' }]}>
+      <Text style={{ color: '#aaa', fontSize: 13 }}>Inserisci i punteggi per la verifica</Text>
+    </View>
+  );
   const ris = risultato;
   if (ris.ok) return (
-    <View style={[r.box, r.boxOk]}>
+    <View style={[r.box, r.boxOk, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
       <Text style={r.ok}>✓ Tutto corretto</Text>
+      <TouchableOpacity onPress={condividi}
+        style={{ backgroundColor: '#2c5f2e', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <Text style={{ color: '#fff', fontSize: 13, fontWeight: 'bold' }}>📤 Condividi</Text>
+      </TouchableOpacity>
     </View>
   );
   return (
@@ -713,6 +733,7 @@ function SchermatHome({ onImpostazioni }) {
   const [attendibilita, setAttendibilita] = useState('basso');
   const [pagina, setPagina] = useState(1); // 0=foto, 1=griglia
   const pagerRef = useRef(null);
+  const grigliaRef = useRef(null);
 
   useEffect(() => {
     const carica = async () => {
@@ -913,8 +934,8 @@ function SchermatHome({ onImpostazioni }) {
             </View>
           </Modal>
           {/* Immagine statica: swipe pager sempre libero, tap apre Modal zoom */}
-          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ height: SH * 0.42, backgroundColor: '#000' }} activeOpacity={0.85}>
-            <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.42 }} resizeMode="contain" />
+          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ flex: 1, backgroundColor: '#000' }} activeOpacity={0.85}>
+            <Image source={{ uri: foto }} style={{ width: SW, flex: 1 }} resizeMode="contain" />
             <View style={{ position: 'absolute', bottom: 6, right: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
               <Text style={{ color: '#fff', fontSize: 11 }}>🔍 Tocca per zoom</Text>
             </View>
@@ -945,13 +966,8 @@ function SchermatHome({ onImpostazioni }) {
   const paginaGriglia = (
     <View style={{ width: SW, flex: 1 }}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
-        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 6 }}>
-          <Text style={{ fontSize: 10, color: '#9a8a75', letterSpacing: 1 }}>VP: {tabella.nome}</Text>
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity onPress={reset} style={{ paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: '#c8b89a', borderRadius: 8 }}>
-            <Text style={{ color: '#7a6a55', fontSize: 12 }}>↺ Reset</Text>
-          </TouchableOpacity>
-        </View>
+
+        <View ref={grigliaRef} collapsable={false}>
         <Griglia
           datiA={datiA} datiB={datiB} vpA={vpA} vpB={vpB}
           onChangeA={(i, k, v) => aggiorna(setDatiA, i, k, v)}
@@ -965,7 +981,8 @@ function SchermatHome({ onImpostazioni }) {
           onChangeTessereA={v => setTessereA(v)} onChangeTessereB={v => setTessereB(v)}
           onChangeTurno={v => setTurno(v)} onChangeTavolo={v => setTavolo(v)}
         />
-        <PannelloRisultato risultato={risultato} />
+        </View>
+        <PannelloRisultato risultato={risultato} grigliaDaCondividere={grigliaRef} />
       </ScrollView>
     </View>
   );
@@ -1036,7 +1053,7 @@ const r = StyleSheet.create({
 
 // ── Stili header e navigazione ────────────────────────────────────────────────
 const h = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a2e', paddingHorizontal: 12, paddingVertical: 10, paddingTop: 14 },
+  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a2e', paddingHorizontal: 12, paddingVertical: 10, paddingTop: 28 },
   titolo: { flex: 1, textAlign: 'center', color: '#d4af37', fontSize: 14, fontWeight: 'bold', letterSpacing: 2 },
   btnFoto: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   btnFotoT: { fontSize: 20 },
