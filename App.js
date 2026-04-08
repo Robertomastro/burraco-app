@@ -246,7 +246,7 @@ function CVP({ value, onChange, errore, suggerito, coloreTesto }) {
 }
 
 // ── Griglia punteggi compatta ─────────────────────────────────────────────────
-function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, onChangeVpB, risultato, tabella, nomiA, nomiB, tessereA, tessereB, turno, tavolo }) {
+function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, onChangeVpB, risultato, tabella, nomiA, nomiB, tessereA, tessereB, turno, tavolo, onChangeNomiA, onChangeNomiB, onChangeTessereA, onChangeTessereB, onChangeTurno, onChangeTavolo }) {
   const ris = risultato;
   const totA = Number(datiA[3]?.totale) || 0;
   const totB = Number(datiB[3]?.totale) || 0;
@@ -258,36 +258,58 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
 
   const coloreRiga = (i) => i % 2 === 0 ? '#fff' : '#fafaf7';
 
-  const rigaTurnoTavolo = (turno || tavolo) ? (
-    <View style={[g.riga, { backgroundColor: '#2a2a3e', paddingVertical: 5 }]}>
-      <View style={{ flex: 1, alignItems: 'center' }}>
-        <Text style={{ fontSize: 13, color: '#ffffff', letterSpacing: 1, fontWeight: 'bold' }}>
-          {[turno && `Turno ${turno}`, tavolo && `Tavolo ${tavolo}`].filter(Boolean).join('  ·  ')}
-        </Text>
+  // Funzione per aggiornare un elemento di array di stato
+  const updArr = (setter, idx, val) => setter(prev => { const c = [...prev]; c[idx] = val; return c; });
+
+  const rigaTurnoTavolo = (
+    <View style={[g.riga, { backgroundColor: '#2a2a3e', paddingVertical: 3 }]}>
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+        <Text style={{ fontSize: 11, color: '#a0a0c0', fontWeight: 'bold' }}>T.</Text>
+        <TextInput
+          value={turno}
+          onChangeText={onChangeTurno}
+          style={{ fontSize: 12, color: '#fff', fontWeight: 'bold', minWidth: 40, textAlign: 'center', borderBottomWidth: 1, borderBottomColor: '#555', paddingVertical: 2 }}
+          placeholder="—" placeholderTextColor="#666"
+          selectTextOnFocus
+        />
+        <Text style={{ fontSize: 11, color: '#a0a0c0', fontWeight: 'bold', marginLeft: 8 }}>Tav.</Text>
+        <TextInput
+          value={tavolo}
+          onChangeText={onChangeTavolo}
+          style={{ fontSize: 12, color: '#fff', fontWeight: 'bold', minWidth: 40, textAlign: 'center', borderBottomWidth: 1, borderBottomColor: '#555', paddingVertical: 2 }}
+          placeholder="—" placeholderTextColor="#666"
+          selectTextOnFocus
+        />
       </View>
     </View>
-  ) : null;
+  );
 
   const rigaHeader = (
-    <View style={[g.riga, { minHeight: HEADER_H, backgroundColor: '#1a1a2e', paddingVertical: 4 }]}>
+    <View style={[g.riga, { minHeight: HEADER_H, backgroundColor: '#1a1a2e', paddingVertical: 3 }]}>
       <View style={g.labelCol} />
       <View style={g.colA}>
-        {nomiA.filter(Boolean).map((n, i) => (
+        {[0,1].map(i => (
           <View key={i} style={{ alignItems: 'center' }}>
-            <Text style={g.headerNome} numberOfLines={1} adjustsFontSizeToFit>{n}</Text>
-            {tessereA?.[i] ? <Text style={g.headerTessera}>{tessereA[i]}</Text> : null}
+            <TextInput value={nomiA[i] ?? ''} onChangeText={v => updArr(onChangeNomiA, i, v)}
+              style={g.headerInput} placeholder={`Gioc.${i+1}`} placeholderTextColor="#666"
+              selectTextOnFocus />
+            <TextInput value={tessereA[i] ?? ''} onChangeText={v => updArr(onChangeTessereA, i, v)}
+              style={g.headerInputTessera} placeholder="tessera" placeholderTextColor="#555"
+              selectTextOnFocus />
           </View>
         ))}
-        {!nomiA.filter(Boolean).length && <Text style={g.headerNome}>A</Text>}
       </View>
       <View style={g.colB}>
-        {nomiB.filter(Boolean).map((n, i) => (
+        {[0,1].map(i => (
           <View key={i} style={{ alignItems: 'center' }}>
-            <Text style={g.headerNome} numberOfLines={1} adjustsFontSizeToFit>{n}</Text>
-            {tessereB?.[i] ? <Text style={g.headerTessera}>{tessereB[i]}</Text> : null}
+            <TextInput value={nomiB[i] ?? ''} onChangeText={v => updArr(onChangeNomiB, i, v)}
+              style={g.headerInput} placeholder={`Gioc.${i+1}`} placeholderTextColor="#666"
+              selectTextOnFocus />
+            <TextInput value={tessereB[i] ?? ''} onChangeText={v => updArr(onChangeTessereB, i, v)}
+              style={g.headerInputTessera} placeholder="tessera" placeholderTextColor="#555"
+              selectTextOnFocus />
           </View>
         ))}
-        {!nomiB.filter(Boolean).length && <Text style={g.headerNome}>B</Text>}
       </View>
     </View>
   );
@@ -795,14 +817,8 @@ function SchermatHome({ onImpostazioni }) {
       setVpA(filtra(dati.vpA, dati.vpAC));
       setVpB(filtra(dati.vpB, dati.vpBC));
       setStato('idle');
-      // Doppio timeout: il primo aspetta il re-render dei dati, il secondo forza lo scroll
-      setTimeout(() => {
-        pagerRef.current?.scrollTo({ x: SW, animated: true });
-        setPagina(1);
-        setTimeout(() => {
-          pagerRef.current?.scrollTo({ x: SW, animated: false });
-        }, 300);
-      }, 600);
+      // Naviga alla griglia dopo aver aggiornato i dati
+      setTimeout(() => { setPagina(1); }, 100);
     } catch (e) {
       setStato('errore');
       setErroreMsg(e.message);
@@ -815,7 +831,8 @@ function SchermatHome({ onImpostazioni }) {
     if (status !== 'granted') { Alert.alert('Permesso negato', "Consenti l'accesso alla fotocamera."); return; }
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1.0, base64: false });
     if (!res.canceled && res.assets?.[0]?.uri) {
-      salvaInAlbumBurraco(res.assets[0].uri);
+      // NON chiamare salvaInAlbumBurraco qui: causerebbe il dialogo "modifica foto"
+      // La fotocamera Android salva già in DCIM automaticamente
       elaboraFoto(res.assets[0].uri);
     }
   };
@@ -842,7 +859,7 @@ function SchermatHome({ onImpostazioni }) {
     setTurno(''); setTavolo('');
     setNomiA(['', '']); setTessereA(['', '']);
     setNomiB(['', '']); setTessereB(['', '']);
-    setVpA(''); setVpB(''); setRisultato(null); setFoto(null); setStato('idle'); setErroreMsg('');
+    setVpA(''); setVpB(''); setRisultato(null); setFoto(null); setFotoZoom(false); setStato('idle'); setErroreMsg('');
     pagerRef.current?.scrollTo({ x: SW, animated: true }); setPagina(1);
   };
 
@@ -877,36 +894,29 @@ function SchermatHome({ onImpostazioni }) {
         </View>
       ) : foto ? (
         <>
-          {/* Modal fullscreen con pinch-to-zoom graduale */}
+          {/* Modal fullscreen zoom — si apre al tap, swipe pager sempre libero */}
           <Modal visible={fotoZoom} transparent={false} animationType="fade" statusBarTranslucent>
             <View style={{ flex: 1, backgroundColor: '#000' }}>
               <TouchableOpacity onPress={() => setFotoZoom(false)}
-                style={{ position: 'absolute', top: 48, right: 16, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold' }}>✕</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => { setFotoZoom(false); pagerRef.current?.scrollTo({ x: SW, animated: true }); setPagina(1); }}
-                style={{ position: 'absolute', top: 48, left: 16, zIndex: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: 'rgba(212,175,55,0.85)' }}>
-                <Text style={{ color: '#1a1a2e', fontSize: 12, fontWeight: 'bold' }}>Vai ai conteggi →</Text>
+                style={{ position: 'absolute', top: 48, right: 16, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#fff', fontSize: 22, fontWeight: 'bold' }}>✕</Text>
               </TouchableOpacity>
               <ScrollView
                 style={{ flex: 1 }}
                 contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', minHeight: SH }}
-                maximumZoomScale={8}
-                minimumZoomScale={1}
-                centerContent
-                bouncesZoom
-                showsHorizontalScrollIndicator={false}
-                showsVerticalScrollIndicator={false}
+                maximumZoomScale={8} minimumZoomScale={1}
+                centerContent bouncesZoom
+                showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}
               >
-                <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.85 }} resizeMode="contain" />
+                <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.9 }} resizeMode="contain" />
               </ScrollView>
             </View>
           </Modal>
-          {/* Anteprima: occupa parte superiore, toccabile per aprire zoom */}
-          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ height: SH * 0.40, backgroundColor: '#000' }} activeOpacity={0.85}>
-            <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.40 }} resizeMode="contain" />
+          {/* Immagine statica: swipe pager sempre libero, tap apre Modal zoom */}
+          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ height: SH * 0.42, backgroundColor: '#000' }} activeOpacity={0.85}>
+            <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.42 }} resizeMode="contain" />
             <View style={{ position: 'absolute', bottom: 6, right: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
-              <Text style={{ color: '#fff', fontSize: 11 }}>🔍 Pinch per zoom</Text>
+              <Text style={{ color: '#fff', fontSize: 11 }}>🔍 Tocca per zoom</Text>
             </View>
           </TouchableOpacity>
           <View style={h.fotoBar}>
@@ -951,6 +961,9 @@ function SchermatHome({ onImpostazioni }) {
           nomiA={nomiA} nomiB={nomiB}
           tessereA={tessereA} tessereB={tessereB}
           turno={turno} tavolo={tavolo}
+          onChangeNomiA={v => setNomiA(v)} onChangeNomiB={v => setNomiB(v)}
+          onChangeTessereA={v => setTessereA(v)} onChangeTessereB={v => setTessereB(v)}
+          onChangeTurno={v => setTurno(v)} onChangeTavolo={v => setTavolo(v)}
         />
         <PannelloRisultato risultato={risultato} />
       </ScrollView>
@@ -994,6 +1007,8 @@ const g = StyleSheet.create({
   colA: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
   colB: { flex: 1, borderLeftWidth: 1, borderLeftColor: '#e8e0d0', paddingHorizontal: 3, justifyContent: 'center' },
   headerNome: { fontSize: 11, color: '#d4af37', fontWeight: 'bold', textAlign: 'center', letterSpacing: 0.3 },
+  headerInput: { fontSize: 11, color: '#d4af37', fontWeight: 'bold', textAlign: 'center', borderBottomWidth: 1, borderBottomColor: '#d4af3766', paddingVertical: 1, minWidth: 60 },
+  headerInputTessera: { fontSize: 9, color: '#ffffff', textAlign: 'center', borderBottomWidth: 1, borderBottomColor: '#ffffff44', paddingVertical: 1, minWidth: 40 },
   headerTessera: { fontSize: 11, color: '#ffffff', textAlign: 'center', letterSpacing: 0.5, fontWeight: 'bold' },
   divider: { height: 2, backgroundColor: '#2a2a3e' },
   dividerRiepilogo: { height: 3, backgroundColor: '#1a1a2e' },
@@ -1021,7 +1036,7 @@ const r = StyleSheet.create({
 
 // ── Stili header e navigazione ────────────────────────────────────────────────
 const h = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a2e', paddingHorizontal: 12, paddingVertical: 10 },
+  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a2e', paddingHorizontal: 12, paddingVertical: 10, paddingTop: 14 },
   titolo: { flex: 1, textAlign: 'center', color: '#d4af37', fontSize: 14, fontWeight: 'bold', letterSpacing: 2 },
   btnFoto: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   btnFotoT: { fontSize: 20 },
