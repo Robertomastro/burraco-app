@@ -335,8 +335,11 @@ function Griglia({ datiA, datiB, vpA, vpB, onChangeA, onChangeB, onChangeVpA, on
     const prevTotB = i === 0 ? 0 : (Number(datiB[i-1].totale)||0);
 
     // Valore atteso per BASE: totale_scritto - totale_precedente - punti
-    const sugBaseA = (Number(datiA[i].totale)||0) - prevTotA - (Number(datiA[i].punti)||0);
-    const sugBaseB = (Number(datiB[i].totale)||0) - prevTotB - (Number(datiB[i].punti)||0);
+    // Proposto solo se il risultato è multiplo di 50, altrimenti null (campo solo evidenziato)
+    const _sugBaseA = (Number(datiA[i].totale)||0) - prevTotA - (Number(datiA[i].punti)||0);
+    const _sugBaseB = (Number(datiB[i].totale)||0) - prevTotB - (Number(datiB[i].punti)||0);
+    const sugBaseA = (!isNaN(_sugBaseA) && _sugBaseA % 50 === 0) ? _sugBaseA : null;
+    const sugBaseB = (!isNaN(_sugBaseB) && _sugBaseB % 50 === 0) ? _sugBaseB : null;
 
     // Valore atteso per PUNTI: totale_scritto - totale_precedente - base
     const sugPuntiA = (Number(datiA[i].totale)||0) - prevTotA - (Number(datiA[i].base)||0);
@@ -792,10 +795,14 @@ function SchermatHome({ onImpostazioni }) {
       setVpA(filtra(dati.vpA, dati.vpAC));
       setVpB(filtra(dati.vpB, dati.vpBC));
       setStato('idle');
+      // Doppio timeout: il primo aspetta il re-render dei dati, il secondo forza lo scroll
       setTimeout(() => {
         pagerRef.current?.scrollTo({ x: SW, animated: true });
         setPagina(1);
-      }, 400);
+        setTimeout(() => {
+          pagerRef.current?.scrollTo({ x: SW, animated: false });
+        }, 300);
+      }, 600);
     } catch (e) {
       setStato('errore');
       setErroreMsg(e.message);
@@ -870,23 +877,36 @@ function SchermatHome({ onImpostazioni }) {
         </View>
       ) : foto ? (
         <>
+          {/* Modal fullscreen con pinch-to-zoom graduale */}
           <Modal visible={fotoZoom} transparent={false} animationType="fade" statusBarTranslucent>
             <View style={{ flex: 1, backgroundColor: '#000' }}>
               <TouchableOpacity onPress={() => setFotoZoom(false)}
-                style={{ position: 'absolute', top: 48, right: 16, zIndex: 10, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+                style={{ position: 'absolute', top: 48, right: 16, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold' }}>✕</Text>
               </TouchableOpacity>
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
-                maximumZoomScale={5} minimumZoomScale={1} centerContent
-                showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
-                <Image source={{ uri: foto }} style={{ width: SW, height: SH }} resizeMode="contain" />
+              <TouchableOpacity onPress={() => { setFotoZoom(false); pagerRef.current?.scrollTo({ x: SW, animated: true }); setPagina(1); }}
+                style={{ position: 'absolute', top: 48, left: 16, zIndex: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: 'rgba(212,175,55,0.85)' }}>
+                <Text style={{ color: '#1a1a2e', fontSize: 12, fontWeight: 'bold' }}>Vai ai conteggi →</Text>
+              </TouchableOpacity>
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', minHeight: SH }}
+                maximumZoomScale={8}
+                minimumZoomScale={1}
+                centerContent
+                bouncesZoom
+                showsHorizontalScrollIndicator={false}
+                showsVerticalScrollIndicator={false}
+              >
+                <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.85 }} resizeMode="contain" />
               </ScrollView>
             </View>
           </Modal>
-          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ height: SH * 0.38, backgroundColor: '#000' }} activeOpacity={0.9}>
-            <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.38 }} resizeMode="contain" />
-            <View style={{ position: 'absolute', bottom: 6, right: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
-              <Text style={{ color: '#fff', fontSize: 11 }}>🔍 Tocca per zoom</Text>
+          {/* Anteprima: occupa parte superiore, toccabile per aprire zoom */}
+          <TouchableOpacity onPress={() => setFotoZoom(true)} style={{ height: SH * 0.40, backgroundColor: '#000' }} activeOpacity={0.85}>
+            <Image source={{ uri: foto }} style={{ width: SW, height: SH * 0.40 }} resizeMode="contain" />
+            <View style={{ position: 'absolute', bottom: 6, right: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+              <Text style={{ color: '#fff', fontSize: 11 }}>🔍 Pinch per zoom</Text>
             </View>
           </TouchableOpacity>
           <View style={h.fotoBar}>
