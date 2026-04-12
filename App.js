@@ -78,76 +78,59 @@ function parseValore(v) {
   return isNaN(n) ? 0 : n;
 }
 
-// ── Prompt OCR — Fase 1: lettura letterale ────────────────────────────────────
-const PROMPT_LETTURA = `Sei un esperto di lettura di segnapunti di Burraco scritti a mano.
-Devi leggere il foglio nell'immagine. Struttura: due colonne A e B, 4 mani, ciascuna con BASE + PUNTI + TOTALE. In fondo VP.
+// ── Prompt OCR — unica chiamata con thinking e autovalidazione ───────────────
+const SYSTEM_PROMPT = `Sei un esperto di lettura di segnapunti di Burraco scritti a mano.
+Struttura del foglio: due colonne A e B, 4 mani, ciascuna con BASE + PUNTI + TOTALE. In fondo VP (Victory Point) per A e B.
 
-FASE 1 — LETTURA LETTERALE
-Leggi ogni cifra esattamente come scritta, senza interpretare, senza arrotondare, senza sommare.
-Per ogni valore trascrivi il numero che vedi fisicamente scritto nella cella.
+════ STEP 1 — VINCOLI ASSOLUTI (non negoziabili) ════
+Questi vincoli valgono SEMPRE, hanno priorita' su tutto il resto:
+  BASE:  DEVE essere multiplo di 50.  Valori ammessi: 0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600...
+  PUNTI: DEVE essere multiplo di 5.   Valori ammessi: 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60...
+  TOTALE: leggi il numero scritto. NON calcolare, NON sommare.
+Se leggi un valore che non rispetta il vincolo (es. BASE=390), scegli il multiplo piu' vicino (400).
+Un valore come 390, 205, 415 non puo' MAI essere una BASE o un PUNTI valido.
 
-REGOLE DI LETTURA:
-- Trattino o slash isolato = 0
-- Numero con "-" prima o dopo = negativo
-- Se una cella e' vuota = 0
+════ STEP 2 — LETTURA CON ATTENZIONE ALLE CIFRE AMBIGUE ════
+Cifre spesso confuse nella scrittura italiana a mano:
+  5 vs 3: il 5 ha la stanghetta superiore orizzontale, il 3 ha due curve aperte a destra
+  5 vs 8: il 5 ha la parte superiore piatta e aperta, l'8 e' chiuso
+  0 vs 6: lo 0 e' ovale chiuso, il 6 ha un gancio in alto a sinistra
+  0 vs 9: lo 0 e' ovale, il 9 ha un cerchio in alto e un'asta che scende
+  1 vs 7: il 7 ha una barra orizzontale in alto
+  4 vs 9: il 4 ha la forma ad angolo con gamba verticale
+Usa il vincolo del campo (multiplo di 50 o 5) per scegliere tra cifre ambigue.
+Esempio: se vedi qualcosa tra 55 e 35, per PUNTI entrambi vanno bene — scegli quello piu' simile visivamente.
+Esempio: se vedi qualcosa tra 390 e 400, per BASE scegli 400 (390 non e' ammesso).
 
-CIFRE SPESSO CONFUSE nella scrittura italiana a mano:
-- 5 vs 3: il 5 ha la parte superiore piatta, il 3 ha due curve aperte a destra
-- 5 vs 8: il 5 ha la parte superiore diritta, l'8 e' chiuso
-- 0 vs 6: lo 0 e' ovale chiuso, il 6 ha un gancio in alto
-- 0 vs 9: lo 0 e' ovale, il 9 ha un cerchio in alto e un'asta in basso
-- 1 vs 7: il 7 ha una sbarra orizzontale in alto
-- 4 vs 9: il 4 ha angoli, il 9 e' tondo
-- 2 vs 7: il 2 ha una curva in basso, il 7 ha la diagonale
+Trattino, slash o segno isolato = 0. Numero con "-" = negativo.
 
-Per BASE: i valori tipici sono multipli di 50 (0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500...)
-Per PUNTI: i valori tipici sono multipli di 5 (0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55...)
-Per TOTALE: leggi ESATTAMENTE il numero scritto, e' cumulativo (sempre piu' grande delle mani precedenti)
+════ STEP 3 — VALIDAZIONE MATEMATICA ════
+Regola del Burraco: TOTALE[mano N] = TOTALE[mano N-1] + BASE[mano N] + PUNTI[mano N]
+Dopo aver letto tutti i valori rispettando i vincoli dello step 1:
+1. Calcola il totale atteso per ogni mano: tot_prec + base + punti
+2. Se il totale scritto differisce da quello atteso, identifica quale dei tre campi ha la confidenza PIU\' BASSA
+3. Correggi SOLO quel campo scegliendo il valore che fa tornare i conti, rispettando i vincoli:
+   - Se correggi BASE: il nuovo valore deve essere multiplo di 50
+   - Se correggi PUNTI: il nuovo valore deve essere multiplo di 5
+   - Se correggi TOTALE: qualsiasi valore intero
+4. Se la correzione richiesta viola il vincolo (es. correggere BASE richiederebbe 390), allora scarta quel campo e correggi il campo con la seconda confidenza piu\' bassa
+5. Abbassa la confidenza del campo corretto a 40
 
-Assegna confidenza 0-100 per ogni valore:
-100=certissimo, 80-99=quasi certo, 50-79=incerto, 0-49=molto dubbio
+════ STEP 4 — CONFIDENZA ════
+100 = certissimo | 80-99 = quasi certo | 50-79 = incerto | 0-49 = molto dubbio
+Abbassa la confidenza quando hai dubbi sulla cifra o quando il valore non torna matematicamente.
 
-Rispondi SOLO con JSON:
+Leggi anche se presenti: turno, tavolo, nomi giocatori, tessere.
+
+Rispondi SOLO con JSON valido (nessun testo prima o dopo):
 {"turno":"","tavolo":"","nomiA":["",""],"tessereA":["",""],"nomiB":["",""],"tessereB":["",""],"smazzate":[{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}}],"vpA":0,"vpAC":100,"vpB":0,"vpBC":100}`;
 
-// ── Prompt OCR — Fase 2: validazione matematica e correzione ──────────────────
-function buildPromptValidazione(datiLetti) {
-  const j = JSON.stringify(datiLetti, null, 2);
-  return `Hai letto questo segnapunti di Burraco:
-${j}
-
-FASE 2 — VALIDAZIONE MATEMATICA E CORREZIONE
-
-Regola fondamentale del Burraco: TOTALE[mano_i] = TOTALE[mano_i-1] + BASE[mano_i] + PUNTI[mano_i]
-(Il totale della prima mano = BASE + PUNTI della prima mano)
-
-Per ogni mano e per ogni colonna (A e B):
-1. Calcola il totale atteso: totale_precedente + base + punti
-2. Confronta con il totale scritto
-3. Se c'e' incongruenza: individua quale campo e' piu' probabilmente sbagliato in base alla confidenza
-4. Considera letture alternative per le cifre ambigue (5/3, 5/8, 0/9, 0/6, 1/7, 4/9)
-5. Scegli la lettura che rende il conto matematicamente corretto
-6. Abbassa la confidenza del campo corretto se hai dovuto modificare un valore
-
-Logica di correzione: se totale_scritto != base + punti + tot_prec, allora:
-- Il campo con confidenza PIU' BASSA e' probabilmente quello errato
-- Prova a modificare una sola cifra di quel campo per far tornare i conti
-- BASE deve restare multiplo di 50, PUNTI multiplo di 5
-
-Restituisci il JSON corretto (stessa struttura dell'input) con i valori verificati.
-Rispondi SOLO con JSON valido.`;
-}
-
-// ── Preprocessing: contrasto aumentato + scala di grigi ──────────────────────
+// ── Preprocessing: ridimensiona per velocità senza perdere dettaglio ──────────
 async function preprocessImmagine(uri) {
   try {
-    // Converti in scala di grigi e aumenta il contrasto per migliorare l'OCR
     const risultato = await ImageManipulator.manipulateAsync(
       uri,
-      [
-        // Ridimensiona se troppo grande (max 2000px lato lungo) per velocità API
-        { resize: { width: 1600 } },
-      ],
+      [{ resize: { width: 1400 } }],
       { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG }
     );
     return risultato.uri;
@@ -156,63 +139,40 @@ async function preprocessImmagine(uri) {
   }
 }
 
-// ── OCR in due fasi con autovalidazione matematica ───────────────────────────
+// ── OCR: singola chiamata con extended thinking ───────────────────────────────
 async function estraiDatiDaFoto(uri, apiKey) {
   const uriProcessato = await preprocessImmagine(uri);
   const base64 = await FileSystem.readAsStringAsync(uriProcessato, { encoding: FileSystem.EncodingType.Base64 });
 
-  const headers = {
-    'Content-Type': 'application/json',
-    'x-api-key': apiKey,
-    'anthropic-version': '2023-06-01',
-    'anthropic-beta': 'interleaved-thinking-2025-05-14',
-  };
-
-  // ── FASE 1: lettura letterale con extended thinking ───────────────────────
-  const body1 = JSON.stringify({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 8000,
-    thinking: { type: 'enabled', budget_tokens: 4000 },
-    system: PROMPT_LETTURA,
-    messages: [{ role: 'user', content: [
-      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-      { type: 'text', text: 'Leggi il segnapunti e restituisci il JSON:' },
-    ]}],
+  const risposta = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'interleaved-thinking-2025-05-14',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 5000,
+      thinking: { type: 'enabled', budget_tokens: 3000 },
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+        { type: 'text', text: 'Leggi il segnapunti seguendo gli step 1-4 e restituisci il JSON:' },
+      ]}],
+    }),
   });
 
-  const r1 = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: body1 });
-  if (!r1.ok) {
-    const err = await r1.json().catch(() => ({}));
-    throw new Error(err?.error?.message ?? `Errore API fase 1: ${r1.status}`);
+  if (!risposta.ok) {
+    const err = await risposta.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `Errore API: ${risposta.status}`);
   }
-  const d1 = await r1.json();
-  const t1 = d1.content.find(b => b.type === 'text')?.text ?? '';
-  const m1 = t1.match(/\{[\s\S]*\}/);
-  if (!m1) throw new Error('Risposta OCR fase 1 non valida');
-  const datiLetti = JSON.parse(m1[0]);
-
-  // ── FASE 2: validazione matematica con extended thinking ─────────────────
-  const body2 = JSON.stringify({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 8000,
-    thinking: { type: 'enabled', budget_tokens: 5000 },
-    messages: [{ role: 'user', content: [
-      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-      { type: 'text', text: buildPromptValidazione(datiLetti) },
-    ]}],
-  });
-
-  const r2 = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: body2 });
-  if (!r2.ok) {
-    // Se la fase 2 fallisce, restituiamo comunque i dati della fase 1
-    console.warn('Fase 2 fallita, uso risultati fase 1');
-    return datiLetti;
-  }
-  const d2 = await r2.json();
-  const t2 = d2.content.find(b => b.type === 'text')?.text ?? '';
-  const m2 = t2.match(/\{[\s\S]*\}/);
-  if (!m2) return datiLetti; // fallback fase 1
-  return JSON.parse(m2[0]);
+  const dati = await risposta.json();
+  const testo = dati.content.find(b => b.type === 'text')?.text ?? '';
+  const match = testo.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('Risposta OCR non valida');
+  return JSON.parse(match[0]);
 }
 
 // ── Logica verifica ───────────────────────────────────────────────────────────
