@@ -78,92 +78,71 @@ function parseValore(v) {
   return isNaN(n) ? 0 : n;
 }
 
-// ── Prompt OCR — unica chiamata con thinking e autovalidazione ───────────────
-const SYSTEM_PROMPT = `Sei un esperto di lettura di segnapunti di Burraco scritti a mano.
-Struttura del foglio: due colonne A e B, 4 mani, ciascuna con BASE + PUNTI + TOTALE. In fondo VP (Victory Point) per A e B.
+// ── Prompt OCR ────────────────────────────────────────────────────────────────
+const SYSTEM_PROMPT = `Leggi un segnapunti di Burraco scritto a mano.
+Struttura: due colonne A e B, 4 mani, ciascuna con BASE + PUNTI + TOTALE. In fondo VP.
 
-════ STEP 1 — VINCOLI ASSOLUTI (non negoziabili) ════
-Questi vincoli valgono SEMPRE, hanno priorita' su tutto il resto:
-  BASE:  DEVE essere multiplo di 50.  Valori ammessi: 0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600...
-  PUNTI: DEVE essere multiplo di 5.   Valori ammessi: 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60...
-  TOTALE: leggi il numero scritto. NON calcolare, NON sommare.
-Se leggi un valore che non rispetta il vincolo (es. BASE=390), scegli il multiplo piu' vicino (400).
-Un valore come 390, 205, 415 non puo' MAI essere una BASE o un PUNTI valido.
+REGOLA 1 — VINCOLI ASSOLUTI (hanno priorità su tutto):
+BASE deve essere multiplo di 50: 0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500...
+PUNTI deve essere multiplo di 5: 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55...
+Se leggi un valore non ammesso, scegli il multiplo più vicino visivamente.
+TOTALE: trascrivi ESATTAMENTE il numero scritto. Non calcolare mai.
 
-════ STEP 2 — LETTURA CON ATTENZIONE ALLE CIFRE AMBIGUE ════
-Cifre spesso confuse nella scrittura italiana a mano:
-  5 vs 3: il 5 ha la stanghetta superiore orizzontale, il 3 ha due curve aperte a destra
-  5 vs 8: il 5 ha la parte superiore piatta e aperta, l'8 e' chiuso
-  0 vs 6: lo 0 e' ovale chiuso, il 6 ha un gancio in alto a sinistra
-  0 vs 9: lo 0 e' ovale, il 9 ha un cerchio in alto e un'asta che scende
-  1 vs 7: il 7 ha una barra orizzontale in alto
-  4 vs 9: il 4 ha la forma ad angolo con gamba verticale
-Usa il vincolo del campo (multiplo di 50 o 5) per scegliere tra cifre ambigue.
-Esempio: se vedi qualcosa tra 55 e 35, per PUNTI entrambi vanno bene — scegli quello piu' simile visivamente.
-Esempio: se vedi qualcosa tra 390 e 400, per BASE scegli 400 (390 non e' ammesso).
+REGOLA 2 — CIFRE AMBIGUE (usa il vincolo del campo per disambiguare):
+5 vs 3: il 5 ha stanghetta superiore orizzontale, il 3 ha due curve aperte a destra
+5 vs 8: il 5 ha parte superiore piatta, l'8 è chiuso
+0 vs 6: lo 0 è ovale chiuso, il 6 ha gancio in alto
+0 vs 9: lo 0 è ovale, il 9 ha asta in basso
+1 vs 7: il 7 ha barra orizzontale in alto
+Trattino o slash isolato = 0. Segno meno = negativo.
 
-Trattino, slash o segno isolato = 0. Numero con "-" = negativo.
+REGOLA 3 — VALIDAZIONE MATEMATICA (senza cascata):
+Formula: TOTALE[N] = TOTALE[N-1] + BASE[N] + PUNTI[N]
+Per ogni mano A e B separatamente:
+  1. Calcola il totale atteso
+  2. Se corrisponde: confidenza alta, prosegui
+  3. Se non corrisponde: il campo con confidenza PIÙ BASSA è probabilmente errato.
+     Prova a correggerlo con il valore che fa tornare i conti, rispettando REGOLA 1.
+     Se impossibile senza violare REGOLA 1: lascia tutti i valori come letti, abbassa confidenze a 40.
+  4. STOP CASCATA: se una mano resta incongruente dopo il tentativo di correzione,
+     NON usare il suo totale per correggere le mani successive.
+     Le mani successive vanno lette e trascritte esattamente come scritte, senza correzioni matematiche.
 
-════ STEP 3 — VALIDAZIONE MATEMATICA ════
-Regola del Burraco: TOTALE[mano N] = TOTALE[mano N-1] + BASE[mano N] + PUNTI[mano N]
-Dopo aver letto tutti i valori rispettando i vincoli dello step 1:
-1. Calcola il totale atteso per ogni mano: tot_prec + base + punti
-2. Se il totale scritto differisce da quello atteso, identifica quale dei tre campi ha la confidenza PIU\' BASSA
-3. Correggi SOLO quel campo scegliendo il valore che fa tornare i conti, rispettando i vincoli:
-   - Se correggi BASE: il nuovo valore deve essere multiplo di 50
-   - Se correggi PUNTI: il nuovo valore deve essere multiplo di 5
-   - Se correggi TOTALE: qualsiasi valore intero
-4. Se la correzione richiesta viola il vincolo (es. correggere BASE richiederebbe 390), allora scarta quel campo e correggi il campo con la seconda confidenza piu\' bassa
-5. Abbassa la confidenza del campo corretto a 40
+REGOLA 4 — CONFIDENZA:
+100=certissimo | 80-99=quasi certo | 50-79=incerto | 0-49=dubbio o corretto automaticamente
 
-════ STEP 4 — CONFIDENZA ════
-100 = certissimo | 80-99 = quasi certo | 50-79 = incerto | 0-49 = molto dubbio
-Abbassa la confidenza quando hai dubbi sulla cifra o quando il valore non torna matematicamente.
+Leggi anche: turno, tavolo, nomi, tessere se presenti.
+Rispondi SOLO con JSON valido:
+{turno:,tavolo:,nomiA:[,],tessereA:[,],nomiB:[,],tessereB:[,],smazzate:[{a:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100},b:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100}},{a:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100},b:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100}},{a:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100},b:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100}},{a:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100},b:{base:0,baseC:100,punti:0,puntiC:100,totale:0,totaleC:100}}],vpA:0,vpAC:100,vpB:0,vpBC:100}`;
 
-Leggi anche se presenti: turno, tavolo, nomi giocatori, tessere.
-
-Rispondi SOLO con JSON valido (nessun testo prima o dopo):
-{"turno":"","tavolo":"","nomiA":["",""],"tessereA":["",""],"nomiB":["",""],"tessereB":["",""],"smazzate":[{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}},{"a":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100},"b":{"base":0,"baseC":100,"punti":0,"puntiC":100,"totale":0,"totaleC":100}}],"vpA":0,"vpAC":100,"vpB":0,"vpBC":100}`;
-
-// ── Preprocessing: ridimensiona per velocità senza perdere dettaglio ──────────
+// ── Preprocessing ──────────────────────────────────────────────────────────────
 async function preprocessImmagine(uri) {
   try {
     const risultato = await ImageManipulator.manipulateAsync(
-      uri,
-      [{ resize: { width: 1400 } }],
+      uri, [{ resize: { width: 1400 } }],
       { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG }
     );
     return risultato.uri;
-  } catch (_) {
-    return uri;
-  }
+  } catch (_) { return uri; }
 }
 
-// ── OCR: singola chiamata con extended thinking ───────────────────────────────
+// ── OCR: singola chiamata senza extended thinking ─────────────────────────────
 async function estraiDatiDaFoto(uri, apiKey) {
   const uriProcessato = await preprocessImmagine(uri);
   const base64 = await FileSystem.readAsStringAsync(uriProcessato, { encoding: FileSystem.EncodingType.Base64 });
-
   const risposta = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'interleaved-thinking-2025-05-14',
-    },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 5000,
-      thinking: { type: 'enabled', budget_tokens: 3000 },
+      max_tokens: 1024,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-        { type: 'text', text: 'Leggi il segnapunti seguendo gli step 1-4 e restituisci il JSON:' },
+        { type: 'text', text: 'JSON:' },
       ]}],
     }),
   });
-
   if (!risposta.ok) {
     const err = await risposta.json().catch(() => ({}));
     throw new Error(err?.error?.message ?? `Errore API: ${risposta.status}`);
