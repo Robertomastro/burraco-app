@@ -25,7 +25,8 @@ const SMAZZATE = 4;
 
 // Soglie confidenza per livello attendibilità
 // basso: mostra sempre | medio: >= 60 | alto: >= 85
-const SOGLIA_ATTENDIBILITA = { basso: 0, medio: 60, alto: 85 };
+const SOGLIA_ATTENDIBILITA = { basso: 0, medio: 70, alto: 90 };
+const SOGLIA_INAFFIDABILE = 40; // sotto questa soglia il campo è scartato dalla validazione
 
 // ── Tabelle predefinite ───────────────────────────────────────────────────────
 const TABELLA_DEFAULT = {
@@ -96,20 +97,10 @@ REGOLA 2 — CIFRE AMBIGUE (usa il vincolo del campo per disambiguare):
 1 vs 7: il 7 ha barra orizzontale in alto
 Trattino o slash isolato = 0. Segno meno = negativo.
 
-REGOLA 3 — VALIDAZIONE MATEMATICA (senza cascata):
-Formula: TOTALE[N] = TOTALE[N-1] + BASE[N] + PUNTI[N]
-Per ogni mano A e B separatamente:
-  1. Calcola il totale atteso
-  2. Se corrisponde: confidenza alta, prosegui
-  3. Se non corrisponde: il campo con confidenza PIÙ BASSA è probabilmente errato.
-     Prova a correggerlo con il valore che fa tornare i conti, rispettando REGOLA 1.
-     Se impossibile senza violare REGOLA 1: lascia tutti i valori come letti, abbassa confidenze a 40.
-  4. STOP CASCATA: se una mano resta incongruente dopo il tentativo di correzione,
-     NON usare il suo totale per correggere le mani successive.
-     Le mani successive vanno lette e trascritte esattamente come scritte, senza correzioni matematiche.
-
-REGOLA 4 — CONFIDENZA:
-100=certissimo | 80-99=quasi certo | 50-79=incerto | 0-49=dubbio o corretto automaticamente
+REGOLA 3 — CONFIDENZA:
+Abbassa la confidenza quando hai dubbi sulla cifra:
+95-100 = chiarissima | 75-90 = abbastanza chiara | 50-70 = ambigua | 20-45 = molto dubbia
+NON fare verifiche matematiche: la validazione è compito dell'app.
 
 Leggi anche: turno, tavolo, nomi, tessere se presenti.
 Rispondi SOLO con JSON valido:
@@ -793,10 +784,8 @@ function SchermatHome({ onImpostazioni }) {
     setStato('analisi');
     setRisultato(null);
     setErroreMsg('');
-    // Reset completo dei dati precedenti prima di caricare i nuovi
     const vuotoArr = Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
-    setDatiA(vuotoArr);
-    setDatiB(vuotoArr);
+    setDatiA(vuotoArr); setDatiB(vuotoArr);
     setTurno(''); setTavolo('');
     setNomiA(['', '']); setTessereA(['', '']);
     setNomiB(['', '']); setTessereB(['', '']);
@@ -806,34 +795,132 @@ function SchermatHome({ onImpostazioni }) {
     try {
       const dati = await estraiDatiDaFoto(uri, apiKey);
       const soglia = SOGLIA_ATTENDIBILITA[attendibilita] ?? 0;
-      // Se la confidenza è sotto la soglia, il campo viene lasciato vuoto
-      const filtra = (val, conf) => {
-        const n = parseValore(val);
-        const c = Number(conf) || 0;
-        if (c < soglia) return ''; // sotto soglia: campo vuoto
-        return String(n);
-      };
-      const nA = dati.smazzate.map(sm => ({
-        base:   filtra(sm.a.base,   sm.a.baseC),
-        punti:  filtra(sm.a.punti,  sm.a.puntiC),
-        totale: filtra(sm.a.totale, sm.a.totaleC),
-      }));
-      const nB = dati.smazzate.map(sm => ({
-        base:   filtra(sm.b.base,   sm.b.baseC),
-        punti:  filtra(sm.b.punti,  sm.b.puntiC),
-        totale: filtra(sm.b.totale, sm.b.totaleC),
-      }));
+
+      // ── Imposta sempre: anagrafica e dati del turno ───────────────────────
       setTurno(dati.turno ?? '');
       setTavolo(dati.tavolo ?? '');
       setNomiA(dati.nomiA?.length ? dati.nomiA : ['', '']);
       setTessereA(dati.tessereA?.length ? dati.tessereA : ['', '']);
       setNomiB(dati.nomiB?.length ? dati.nomiB : ['', '']);
       setTessereB(dati.tessereB?.length ? dati.tessereB : ['', '']);
-      setDatiA(nA); setDatiB(nB);
-      setVpA(filtra(dati.vpA, dati.vpAC));
-      setVpB(filtra(dati.vpB, dati.vpBC));
+
+      // ── Imposta sempre: VP letti (con filtro confidenza) e totali riepilogo ──
+      const filtraConf = (val, conf) => {
+        const n = parseValore(val);
+        return (Number(conf) || 0) >= soglia ? String(n) : '';
+      };
+      setVpA(filtraConf(dati.vpA, dati.vpAC));
+      setVpB(filtraConf(dati.vpB, dati.vpBC));
+
+      // ── Validazione backwards per ogni coppia indipendentemente ──────────
+      // Legge i valori grezzi con le loro confidenze
+      const leggi = (sm, lato) => ({
+        base:   parseValore(sm[lato].base),
+        baseC:  Number(sm[lato].baseC)  || 0,
+        punti:  parseValore(sm[lato].punti),
+        puntiC: Number(sm[lato].puntiC) || 0,
+        totale: parseValore(sm[lato].totale),
+        totaleC:Number(sm[lato].totaleC)|| 0,
+      });
+
+      const valida = (lato) => {
+        // Risultato: array di 4 oggetti {base, punti, totale} o stringa vuota per campo non affidabile
+        const risultato = Array.from({ length: SMAZZATE }, () => ({ base: '', punti: '', totale: '' }));
+        const sm = dati.smazzate.map(s => leggi(s, lato));
+
+        // Partenza: totale della mano 4 (indice 3)
+        // Lo inseriamo sempre se confidenza >= soglia
+        const tot4 = sm[3];
+        if (tot4.totaleC < soglia) return risultato; // totale riepilogativo inaffidabile → tutto vuoto
+
+        risultato[3].totale = String(tot4.totale);
+
+        // Scorro da mano 4 (i=3) verso mano 1 (i=0)
+        for (let i = 3; i >= 0; i--) {
+          const m = sm[i];
+          const prevTot = i > 0 ? parseValore(risultato[i-1].totale) : 0;
+
+          // Vincolo multipli (propedeutico)
+          const baseOk   = m.base  % 50 === 0;
+          const puntiOk  = m.punti % 5  === 0;
+
+          // Confidenza sufficiente?
+          const baseAff   = m.baseC  >= soglia;
+          const puntiAff  = m.puntiC >= soglia;
+
+          // Se base o punti non rispettano il vincolo o sono inaffidabili: fermati
+          if (!baseOk || !puntiOk || !baseAff || !puntiAff) {
+            // Azzera questa mano e tutte le precedenti
+            for (let j = i; j >= 0; j--) {
+              risultato[j] = { base: '', punti: '', totale: '' };
+            }
+            break;
+          }
+
+          // Verifica matematica: prevTot + base + punti deve == totale scritto
+          const totAtteso = prevTot + m.base + m.punti;
+
+          if (i === 3) {
+            // Mano 4: già inserito il totale, verifichiamo base e punti
+            if (totAtteso !== tot4.totale) {
+              // Non torna: lascia base e punti vuoti per questa mano e tutte le precedenti
+              risultato[3].base  = '';
+              risultato[3].punti = '';
+              for (let j = 2; j >= 0; j--) {
+                risultato[j] = { base: '', punti: '', totale: '' };
+              }
+              break;
+            }
+            risultato[3].base  = String(m.base);
+            risultato[3].punti = String(m.punti);
+          } else {
+            // Mani 1-3: verifichiamo che il totale precedente sia coerente
+            // totale[i] deve essere uguale a totale[i+1] - base[i+1] - punti[i+1]
+            // ovvero prevTot = risultato[i].totale deve essere già inserito
+            // e base[i] + punti[i] + prevTot == totale[i+1] - già verificato al passo i+1
+
+            // Verifica che totale[i] (già inserito) sia coerente con base[i] e punti[i]
+            const totCorrente = parseValore(risultato[i].totale);
+            if (totCorrente === '' || isNaN(totCorrente)) {
+              // totale di questa mano non disponibile → fermati
+              for (let j = i; j >= 0; j--) {
+                risultato[j] = { base: '', punti: '', totale: '' };
+              }
+              break;
+            }
+
+            if (prevTot + m.base + m.punti !== totCorrente) {
+              // Non torna: lascia base e punti vuoti, e svuota tutto il precedente
+              risultato[i].base  = '';
+              risultato[i].punti = '';
+              for (let j = i-1; j >= 0; j--) {
+                risultato[j] = { base: '', punti: '', totale: '' };
+              }
+              break;
+            }
+            risultato[i].base  = String(m.base);
+            risultato[i].punti = String(m.punti);
+
+            // Inserisci il totale della mano precedente (i-1) se i > 0
+            if (i > 0) {
+              const prevM = sm[i-1];
+              if (prevM.totaleC >= soglia) {
+                risultato[i-1].totale = String(prevM.totale);
+              } else {
+                // Totale mano precedente inaffidabile: calcola dal totale corrente
+                risultato[i-1].totale = String(totCorrente - m.base - m.punti);
+              }
+            }
+          }
+        }
+        return risultato;
+      };
+
+      const nA = valida('a');
+      const nB = valida('b');
+      setDatiA(nA);
+      setDatiB(nB);
       setStato('idle');
-      // Naviga alla griglia dopo aver aggiornato i dati
       setTimeout(() => { setPagina(1); }, 100);
     } catch (e) {
       setStato('errore');
