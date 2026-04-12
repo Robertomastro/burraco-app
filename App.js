@@ -25,8 +25,8 @@ const SMAZZATE = 4;
 
 // Soglie confidenza per livello attendibilità
 // basso: mostra sempre | medio: >= 60 | alto: >= 85
-const SOGLIA_ATTENDIBILITA = { basso: 0, medio: 70, alto: 90 };
-const SOGLIA_INAFFIDABILE = 40; // sotto questa soglia il campo è scartato dalla validazione
+const SOGLIA_ATTENDIBILITA = { basso: 0, medio: 50, alto: 80 };
+const SOGLIA_INAFFIDABILE = 30; // sotto questa soglia il campo è scartato dalla validazione
 
 // ── Tabelle predefinite ───────────────────────────────────────────────────────
 const TABELLA_DEFAULT = {
